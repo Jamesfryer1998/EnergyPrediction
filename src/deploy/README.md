@@ -3,7 +3,7 @@
 Releases use **GitHub Actions**: `.github/workflows/ci.yml` lints and tests every push, and
 `.github/workflows/deploy.yml` deploys `main` once CI passes. The deploy job runs **on the server**
 through a self-hosted GitHub Actions runner. The runner
-checks out the commit and calls `deploy/deploy.sh`, which syncs the code, updates the conda
+checks out the commit and calls `src/deploy/deploy.sh`, which syncs the code, updates the conda
 env if dependencies changed, installs the systemd units and restarts the web service.
 
 Tested layout: an Ubuntu 24.04 VM or LXC (for example on the Proxmox box).
@@ -30,7 +30,7 @@ energy ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload, \
   /usr/bin/systemctl enable energy-prediction-web.service, \
   /usr/bin/systemctl restart energy-prediction-web.service, \
   /usr/bin/systemctl --no-pager --lines=0 status energy-prediction-web.service, \
-  /usr/bin/install -m 0644 /opt/energy-prediction/app/deploy/systemd/* /etc/systemd/system/*, \
+  /usr/bin/install -m 0644 /opt/energy-prediction/app/src/deploy/systemd/* /etc/systemd/system/*, \
   /usr/bin/journalctl -u energy-prediction-web -n 50 --no-pager
 ```
 
@@ -75,14 +75,14 @@ Push to `main` (or run the Deploy workflow by hand). Then backfill once:
 sudo -iu energy
 conda activate EnergyPrediction
 cd /opt/energy-prediction/app
-ENERGY_DATA_DIR=/var/lib/energy-prediction/data python main.py ingest --full
-ENERGY_DATA_DIR=/var/lib/energy-prediction/data python main.py nightly --skip-ingest --force-tune
+ENERGY_DATA_DIR=/var/lib/energy-prediction/data python src/main.py ingest --full
+ENERGY_DATA_DIR=/var/lib/energy-prediction/data python src/main.py nightly --skip-ingest --force-tune
 ```
 
 ## Daily schedule
 
 The daily pipeline is scheduled from the dashboard's **SCHEDULE** tab and runs inside the
-web service, so nothing else is needed. `deploy/systemd/energy-prediction-nightly.timer` is
+web service, so nothing else is needed. `src/deploy/systemd/energy-prediction-nightly.timer` is
 kept as an alternative for running without the dashboard. Enable it by hand only if the
 dashboard schedule is stopped, or the pipeline will run twice:
 `sudo systemctl enable --now energy-prediction-nightly.timer`.

@@ -11,7 +11,7 @@ Certs    — REGO prices aren't published by Ofgem (only certificate volumes are
            stays a manual CSV of auction/broker prices.
 
 None of these sources are fetched by this sandboxed build environment; use
-``python main.py probe <name>`` to test a source against the live sites.
+``python src/main.py probe <name>`` to test a source against the live sites.
 """
 from __future__ import annotations
 

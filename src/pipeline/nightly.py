@@ -1,7 +1,7 @@
 """Nightly orchestration: ingest -> tune (when due) -> backtest/compare -> train -> predict -> rank.
 
 Run by the systemd timer (deploy/systemd/energy-prediction-nightly.timer) or
-`python main.py nightly`. Each step is isolated so one failure is recorded
+`python src/main.py nightly`. Each step is isolated so one failure is recorded
 and the remaining steps still run where possible.
 """
 from __future__ import annotations

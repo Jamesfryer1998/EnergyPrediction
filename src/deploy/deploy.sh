@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploy a checked-out commit to this server and restart the services.
-# Called by the CI deploy job running on the server:  deploy/deploy.sh <checkout-dir>
+# Called by the CI deploy job running on the server:  src/deploy/deploy.sh <checkout-dir>
 #
 # Layout on the server:
 #   /opt/energy-prediction/app        code (rsynced from the checkout)
@@ -18,7 +18,7 @@ echo "==> Deploying $(git -C "$SRC" rev-parse --short HEAD) to $APP_DIR"
 mkdir -p "$APP_DIR"
 rsync -a --delete \
   --exclude '.git' --exclude 'data/' --exclude 'logs/' --exclude '.env' \
-  --exclude 'config/overrides.yaml' --exclude '__pycache__' \
+  --exclude 'src/config/overrides.yaml' --exclude '__pycache__' \
   "$SRC"/ "$APP_DIR"/
 
 # ── conda env: create on first deploy, update only when dependencies change ──
@@ -41,12 +41,12 @@ ln -sfn "$(conda env list | awk -v n="$ENV_NAME" '$1==n {print $NF}')" "$APP_ROO
 
 # ── smoke test before touching the running service ──
 conda activate "$ENV_NAME"
-(cd "$APP_DIR" && python main.py --log-level WARNING sources > /dev/null)
+(cd "$APP_DIR" && python src/main.py --log-level WARNING sources > /dev/null)
 conda deactivate
 
 # ── systemd units (reload only if they changed) ──
 UNITS_CHANGED=0
-for unit in "$APP_DIR"/deploy/systemd/*; do
+for unit in "$APP_DIR"/src/deploy/systemd/*; do
   dest="/etc/systemd/system/$(basename "$unit")"
   if ! cmp -s "$unit" "$dest"; then
     sudo install -m 0644 "$unit" "$dest"

@@ -9,8 +9,10 @@ from typing import Any
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-CONFIG_DIR = PROJECT_ROOT / "config"
+SRC_DIR = Path(__file__).resolve().parent        # the code (src/)
+REPO_ROOT = SRC_DIR.parent                        # repo root: data/, logs/ and .env live here
+PROJECT_ROOT = REPO_ROOT                          # relative data_dir / logs resolve against this
+CONFIG_DIR = SRC_DIR / "config"
 
 
 DOTENV_KEYS: set[str] = set()  # keys that came from .env (rather than the shell)
@@ -19,7 +21,7 @@ DOTENV_KEYS: set[str] = set()  # keys that came from .env (rather than the shell
 def load_dotenv(path: Path | None = None) -> None:
     """Read KEY=value lines from the project's .env into the environment (existing values win).
     Keeps secrets such as the IG demo login out of the config files and out of git."""
-    path = path or PROJECT_ROOT / ".env"
+    path = path or REPO_ROOT / ".env"
     try:
         lines = path.read_text().splitlines()
     except OSError:

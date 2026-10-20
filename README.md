@@ -21,18 +21,18 @@ conda activate EnergyPrediction          # always activate before pip installs
 conda install -c conda-forge lightgbm    # conda's build bundles OpenMP on macOS
 pip install -r requirements.txt
 
-python main.py sources      # list every data source and whether it's on
-python main.py demo         # synthetic data, so everything runs offline
-python main.py nightly --skip-ingest
-python main.py web          # http://localhost:5050
+python src/main.py sources      # list every data source and whether it's on
+python src/main.py demo         # synthetic data, so everything runs offline
+python src/main.py nightly --skip-ingest
+python src/main.py web          # http://localhost:5050
 pytest
 ```
 
 With real data:
 
 ```bash
-python main.py ingest --full          # backfill from history_start (takes a while)
-python main.py nightly --force-tune
+python src/main.py ingest --full          # backfill from history_start (takes a while)
+python src/main.py nightly --force-tune
 ```
 
 Delete `data/store` before switching from demo data to real data.
@@ -65,9 +65,9 @@ monthly carbon averages are only used from the 15th of the following month, and 
 storms count from the day they hit, since they're named in advance.
 
 Test a source against the live site without storing anything:
-`python main.py probe gas_prices` (or `carbon_allowances`, `weather_events`, …).
+`python src/main.py probe gas_prices` (or `carbon_allowances`, `weather_events`, …).
 
-See `data/manual/README.md` for the CSV formats. To automate a manual source, override
+See `src/sources/manual_data.md` for the CSV formats (the CSVs go in `data/manual/`). To automate a manual source, override
 its `fetch`/`transform` and keep the same output columns.
 
 Adding a source:
@@ -79,7 +79,7 @@ class MySource(DataSource):
     def transform(self, raw): return pd.DataFrame({"timestamp": ..., "my_value": ...})
 ```
 
-Then add `my_source: {enabled: true}` under `sources:` in `config/settings.yaml`.
+Then add `my_source: {enabled: true}` under `sources:` in `src/config/settings.yaml`.
 
 ## ML
 
@@ -117,7 +117,7 @@ Then add `my_source: {enabled: true}` under `sources:` in `config/settings.yaml`
 
 ## Dashboard
 
-`python main.py web` gives a Flask app in the same dark bento theme as
+`python src/main.py web` gives a Flask app in the same dark bento theme as
 BitcoinPolymarket, with these tabs:
 
 * **Overview**: forecast against actuals, champions, relative value, best half-hours, and
@@ -144,7 +144,7 @@ BitcoinPolymarket, with these tabs:
 * **Data**: source freshness and a series explorer.
 * **Runs**: nightly pipeline history.
 * **Config**: edit default training and backtest parameters and turn sources on or off. Changes
-  are written to `config/overrides.yaml`.
+  are written to `src/config/overrides.yaml`.
 
 Jobs started from the dashboard run in a separate worker process, one at a time. The
 header shows what's running, and a CANCEL button stops it.
@@ -174,7 +174,7 @@ code has no setting that points it anywhere else.
 
 * **Setup**: create an IG demo account, generate an API key while logged in to it (My IG >
   Settings > API keys), and put `IG_API_KEY`, `IG_USERNAME` and `IG_PASSWORD` in `.env` (see
-  `.env.example`). `python main.py ig-check` logs in and shows the market it found ("UK Natural
+  `src/.env.example`; `.env` lives in the repo root). `python src/main.py ig-check` logs in and shows the market it found ("UK Natural
   Gas" by default; pin another with `trading.epic`), its value per point and a live quote.
 * **Data**: the `ig_gas` source downloads hourly bid/ask candles: on the first run the latest
   `trading.history_points` candles (one request), afterwards only what's new since the last
@@ -192,45 +192,50 @@ code has no setting that points it anywhere else.
   the bid), and charges overnight funding at each 22:00 UK cut-off. It reports P&L, Sharpe,
   drawdown, win rate, direction hit rate, spread and funding paid, and buy & hold over the same
   window. It runs as the STRATEGY step of the daily pipeline, or with BACKTEST + TRAIN on the Trading
-  tab, or with `python main.py strategy`.
+  tab, or with `python src/main.py strategy`.
 * **Live paper trading** (Trading tab): every N minutes on weekdays it fetches new candles and a live
   quote, predicts, and trades a paper account (`data/trading/paper.db`) at the live bid/offer.
   With **Mirror trades to IG demo** switched on, each trade is also sent as a market order to the
   IG demo account, and the demo fill is stored next to the paper fill. Cycles run separately from the
-  pipeline jobs, so a long nightly run doesn't hold them up. `python main.py trade [--close]`
+  pipeline jobs, so a long nightly run doesn't hold them up. `python src/main.py trade [--close]`
   runs one cycle from the command line.
 
 ## Deployment
 
 * `.github/workflows/ci.yml` runs lint and tests on every push.
 * `.github/workflows/deploy.yml` runs after CI passes on `main`. Its job runs on the server
-  through a self-hosted runner and calls `deploy/deploy.sh`, which syncs the code, updates
+  through a self-hosted runner and calls `src/deploy/deploy.sh`, which syncs the code, updates
   the conda env when dependencies change, installs the systemd units and restarts
   `energy-prediction-web`.
-* `deploy/systemd/` holds the web service, plus an optional nightly service and timer for running without the dashboard
+* `src/deploy/systemd/` holds the web service, plus an optional nightly service and timer for running without the dashboard
   (02:30 Europe/London).
 
-One-off server setup is in `deploy/README.md`.
+One-off server setup is in `src/deploy/README.md`.
 
 ## Layout
 
 ```
-config/settings.yaml          all tunables (overrides.yaml layered on top, git-ignored)
-main.py                       CLI entry point: python main.py <command>
-settings.py                   loads config/settings.yaml (+ overrides)
-sources/base.py               DataSource ABC (+ ManualCsvSource)
-sources/*.py                  one class per stream (elexon, weather, events, ...)
-storage/parquet_store.py      Parquet partitions + DuckDB SQL
-features/builder.py           leak-free feature matrix
-models/                       Forecaster ABC + model zoo
-training/                     fitting, Optuna tuning, artefact paths
-backtest/                     walk-forward backtester
-evaluation.py                 metrics
-prediction/                   next-day prediction + relative-value ranking
-pipeline/nightly.py           nightly orchestration
-trading/                      IG demo client, gas strategy + backtest, paper trader
-web/                          Flask app, templates, static
-data/                         runtime store, models, runs (git-ignored except manual/)
-deploy/                       deploy script, systemd units, server setup
-tests/
+src/                              all the code (on the Python path; run as python src/main.py)
+  main.py                         CLI entry point: python src/main.py <command>
+  settings.py                     loads config/settings.yaml (+ overrides) and the root .env
+  config/settings.yaml            all tunables (overrides.yaml layered on top, git-ignored)
+  sources/base.py                 DataSource ABC (+ ManualCsvSource)
+  sources/*.py                    one class per stream (elexon, weather, events, ...)
+  storage/parquet_store.py        Parquet partitions + DuckDB SQL
+  features/builder.py             leak-free feature matrix
+  models/                         Forecaster ABC, model zoo, ensemble
+  training/                       fitting, Optuna tuning, artefact paths
+  backtest/                       walk-forward backtester
+  evaluation.py                   metrics
+  prediction/                     next-day prediction + relative-value ranking
+  pipeline/                       daily pipeline orchestration, step logs
+  trading/                        IG demo client, gas strategy + backtest, paper trader
+  web/                            Flask app, templates, static
+  deploy/                         deploy script, systemd units, server setup
+  .env.example                    template for the root .env (secrets)
+tests/                            pytest suite
+README.md, requirements.txt, environment.yml, pyproject.toml, .github/, .gitignore
+
+Not in git (created when it runs): data/ (store, models, runs, trading ledger, manual CSVs),
+logs/, .env
 ```

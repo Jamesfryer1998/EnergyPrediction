@@ -20,14 +20,11 @@ htmlcov/
 
 # ── Runtime data: lives on the machine/server, not in git ──────────────
 # store, models, runs, Optuna studies, trading ledger, schedule.json, downloads
-data/*
-!data/manual/
-data/manual/*
-!data/manual/README.md
+data/
 logs/
 *.log
 # your dashboard Config-tab edits
-config/overrides.yaml
+src/config/overrides.yaml
 
 # ── Editors / OS ───────────────────────────────────────────────────────
 .DS_Store

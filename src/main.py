@@ -1,4 +1,4 @@
-"""CLI:  python main.py <command> [options]
+"""CLI:  python src/main.py <command> [options]
 
   sources                      list registered data sources
   probe <source> [--days 30]   fetch + parse a source live and print it (nothing is stored)

@@ -1,7 +1,7 @@
 name: Deploy
 
 # Runs after CI passes on main. The job executes ON the server via a self-hosted
-# GitHub Actions runner labelled `energy-prediction` (see deploy/README.md for setup).
+# GitHub Actions runner labelled `energy-prediction` (see src/deploy/README.md for setup).
 on:
   workflow_run:
     workflows: ["CI"]
@@ -27,7 +27,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Deploy and restart services
-        run: bash deploy/deploy.sh "$GITHUB_WORKSPACE"
+        run: bash src/deploy/deploy.sh "$GITHUB_WORKSPACE"
 
       - name: Health check
         run: |
