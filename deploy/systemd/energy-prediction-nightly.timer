@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the EnergyPrediction nightly pipeline at 02:30 UK time
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Europe/London
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

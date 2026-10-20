@@ -1,0 +1,118 @@
+# EnergyPrediction settings.
+# Local edits that shouldn't be committed (or edits made from the dashboard) go in
+# config/overrides.yaml, which is deep-merged over this file.
+
+data_dir: data            # relative to project root, or absolute; ENERGY_DATA_DIR overrides
+timezone: Europe/London
+history_start: "2023-01-01"
+
+regions:
+  GB:
+    # Points used for weather. Mix of demand centres and wind/solar-heavy areas.
+    weather_points:
+      london:     [51.5074, -0.1278]
+      birmingham: [52.4862, -1.8904]
+      leeds:      [53.8008, -1.5491]
+      manchester: [53.4808, -2.2426]
+      glasgow:    [55.8642, -4.2518]
+      aberdeen:   [57.1497, -2.0943]
+      cardiff:    [51.4816, -3.1791]
+      norwich:    [52.6309,  1.2974]
+    holiday_division: england-and-wales
+
+# Which data sources run in `ingest`. Names match DataSource.name.
+sources:
+  prices_mid:            {enabled: true}
+  prices_system:         {enabled: true}
+  demand:                {enabled: true}
+  grid_generation:       {enabled: true}
+  grid_carbon_intensity: {enabled: true}
+  weather:
+    enabled: true
+    # Must exist in both the Open-Meteo archive and forecast APIs
+    variables: [temperature_2m, relative_humidity_2m, wind_speed_10m, cloud_cover,
+                shortwave_radiation, precipitation]
+  calendar_events:       {enabled: true}
+  weather_events:        {enabled: true}   # named storms, Met Office storm centre
+  gas_prices:            {enabled: true}   # GB gas SAP: National Gas API, else ONS spreadsheets
+  carbon_allowances:     {enabled: true}   # EUA (EEX auctions) + UKA (GOV.UK monthly) + ECB FX
+  certificates:          {enabled: true}   # REGO + ROC certificates issued per month (Ofgem RER summary reports)
+  certificate_prices:    {enabled: false}  # REGO prices: manual CSV (Ofgem doesn't publish prices)
+  ig_gas:                {enabled: true}   # IG demo hourly quotes for paper trading (needs IG login in .env)
+
+# Forecast targets: name -> (source, column). Each is predicted half-hourly for the next day.
+targets:
+  demand:       {source: demand,        column: demand_itsdo}
+  price_mid:    {source: prices_mid,    column: price_mid}
+  price_system: {source: prices_system, column: system_sell_price}
+
+features:
+  # Smallest lag allowed (in 30-min periods). 96 = 2 days, which keeps every lag
+  # available when predicting all of tomorrow from this morning. Lower = leakage.
+  min_lag: 96
+  lags: [96, 144, 336, 672]
+  rolling_windows: [48, 336]
+
+models:
+  candidates: [seasonal_naive, linear, hgb, lightgbm, torch_mlp]
+
+training:
+  validation_days: 28
+  train_days: 540          # rolling window used for fitting
+
+# Paper trading (IG demo account; never live). Runtime switches (on/off, mirror to IG,
+# interval, size) are on the dashboard's TRADING tab and kept in data/trading/state.json.
+trading:
+  market_search: UK Natural Gas   # IG market search; or pin a market with `epic:`
+  # epic: CC.D.XXXX.IP
+  resolution: HOUR                # candle size used for features and decisions
+  history_points: 4000            # candles fetched on the first download (IG demo allows ~10,000 a week)
+  horizon_hours: 6                # the model predicts the price move over this many hours
+  model: hgb                      # any model from models.candidates (hgb, lightgbm, ...)
+  train_days: 240                 # rolling training window
+  retrain_every_days: 7           # walk-forward backtest refit frequency
+  backtest_days: 90
+  threshold_k: 1.5                # trade only when |predicted move| > k x round-trip spread
+  size: 1                         # contracts per position
+  starting_balance: 10000         # GBP, for equity / returns
+  funding_rate: 0.065             # annual overnight funding on the notional (IG: ~SONIA + 2.5%)
+  # value_per_point: 1.0          # GBP per point per contract; default from IG's market details
+
+ensemble:
+  enabled: true      # blend the best models per target from each backtest; champion only if it wins
+  max_members: 3     # top-N single models considered
+  min_weight: 0.05   # members below this weight are dropped (weights renormalised)
+
+compute:
+  # Fit/tune/predict each model in its own short-lived process. LightGBM and PyTorch each
+  # ship an OpenMP runtime and can deadlock when both are loaded into one process.
+  isolate_models: true
+
+tuning:
+  enabled: true
+  models: [linear, lightgbm, hgb, torch_mlp]
+  n_trials: 40             # per target/model pair
+  timeout_minutes: 15      # per target/model pair
+  max_minutes: 90          # whole tune step; shared between the pairs still to do (0 = no cap)
+  train_days: 180          # trials train on this recent window (production uses training.train_days)
+  retune_every_days: 0     # 0 = tune on every pipeline run; N = only when params are older than N days
+  warm_trials: 15          # trials per pair once its study has learnt from >= warm_after earlier trials
+  warm_after: 20
+  reset_every_days: 7      # start a fresh Optuna study this often (seeded with the current best), 0 = never
+
+backtest:
+  days: 60                 # walk-forward window
+  retrain_every_days: 7
+  workers: auto            # parallel target/model runs; auto = about one per 2 CPU cores
+
+# The daily pipeline is scheduled from the dashboard's SCHEDULE tab (stored in data/schedule.json).
+
+ingest:
+  workers: 4               # sources downloaded concurrently (each also fetches its API windows in parallel)
+
+recommendations:
+  top_n_periods: 6         # cheapest / dearest half-hours reported per price target
+
+web:
+  host: 0.0.0.0
+  port: 5050

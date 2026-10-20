@@ -1,0 +1,36 @@
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ── Secrets: never commit (IG demo login, Flask key, API tokens) ───────
+.env
+.env.*
+!.env.example
+
+# ── Runtime data: lives on the machine/server, not in git ──────────────
+# store, models, runs, Optuna studies, trading ledger, schedule.json, downloads
+data/*
+!data/manual/
+data/manual/*
+!data/manual/README.md
+logs/
+*.log
+# your dashboard Config-tab edits
+config/overrides.yaml
+
+# ── Editors / OS ───────────────────────────────────────────────────────
+.DS_Store
+.vscode/
+.idea/
+*.swp

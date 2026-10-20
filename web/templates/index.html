@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Energy Terminal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="app-header">
+    <div class="app-header-brand">
+        <span class="brand-hex">⚡</span>
+        <span class="brand-name">ENERGY TERMINAL</span>
+    </div>
+    <div class="app-header-center">
+        <span class="header-label">REGION</span><span id="header-region">GB</span>
+        <div class="header-sep"></div>
+        <span class="header-label">LAST RUN</span><span id="header-last-run">--</span>
+        <div class="header-sep"></div>
+        <span id="current-time">--:--:--</span>
+    </div>
+    <div class="app-header-right">
+        <span class="status-pill" id="job-status">● IDLE</span>
+        <button id="job-cancel" title="Stop the running job" hidden>CANCEL</button>
+        <button id="theme-toggle" title="Toggle theme">◐</button>
+    </div>
+</header>
+
+<div class="app-shell">
+    <nav class="app-sidebar">
+        <button class="sidebar-nav-item active" data-tab="overview"><span class="nav-icon">◉</span><span class="nav-label">OVERVIEW</span></button>
+        <button class="sidebar-nav-item" data-tab="predict"><span class="nav-icon">◈</span><span class="nav-label">PREDICT</span></button>
+        <button class="sidebar-nav-item" data-tab="backtest"><span class="nav-icon">⟲</span><span class="nav-label">BACKTEST</span></button>
+        <button class="sidebar-nav-item" data-tab="trading"><span class="nav-icon">⇅</span><span class="nav-label">TRADING</span></button>
+        <button class="sidebar-nav-item" data-tab="schedule"><span class="nav-icon">◷</span><span class="nav-label">SCHEDULE</span></button>
+        <button class="sidebar-nav-item" data-tab="data"><span class="nav-icon">▤</span><span class="nav-label">DATA</span></button>
+        <button class="sidebar-nav-item" data-tab="runs"><span class="nav-icon">▶</span><span class="nav-label">RUNS</span></button>
+        <button class="sidebar-nav-item" data-tab="config"><span class="nav-icon">⚙</span><span class="nav-label">CONFIG</span></button>
+    </nav>
+
+    <main class="app-content">
+        <!-- ═══ OVERVIEW ═══ -->
+        <section class="tab-pane active" id="tab-overview">
+            <div class="bento-grid overview-grid">
+                <div class="bento-cell area-chart">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>NEXT-DAY FORECAST</div>
+                        <div class="cell-controls">
+                            <select id="fc-target">{% for t in targets %}<option value="{{ t }}">{{ t }}</option>{% endfor %}</select>
+                            <select id="fc-date"></select>
+                            <label class="toggle" title="Overlay the forecasts made for the days before, so today can be checked against what was predicted for it">
+                                <input type="checkbox" id="fc-show-prev"><span class="toggle-track"></span>PREVIOUS PREDICTIONS
+                            </label>
+                            <select id="fc-prev-days" title="How many earlier days to show" hidden>
+                                <option value="2" selected>2 days</option><option value="3">3 days</option>
+                                <option value="7">7 days</option><option value="14">14 days</option>
+                            </select>
+                            <span class="bento-badge" id="fc-model">--</span>
+                        </div>
+                    </div>
+                    <div class="bento-chart-canvas"><canvas id="fc-chart"></canvas></div>
+                </div>
+
+                <div class="bento-cell area-kpis">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--up"></span>CHAMPION MODELS</div></div>
+                    <div class="kpi-stack" id="champions"></div>
+                </div>
+
+                <div class="bento-cell area-products">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--amber"></span>RELATIVE VALUE — <span id="rec-date">--</span></div>
+                        <span class="bento-badge">analysis only</span>
+                    </div>
+                    <div class="table-wrap"><table class="data-table" id="products-table"></table></div>
+                </div>
+
+                <div class="bento-cell area-windows">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>BEST HALF-HOURS</div></div>
+                    <div class="windows" id="windows"></div>
+                </div>
+
+                <div class="bento-cell area-controls">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot"></span>CONTROLS</div></div>
+                    <div class="controls">
+                        {% for j in jobs %}<button class="btn-job" data-job="{{ j }}">{{ j|upper }}</button>{% endfor %}
+                    </div>
+                    <pre class="job-output" id="job-output">No job run from the dashboard yet.</pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ PREDICT ═══ -->
+        <section class="tab-pane" id="tab-predict">
+            <div class="bento-grid predict-grid">
+                <div class="bento-cell area-form">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>RUN PREDICTION</div></div>
+                    <form id="predict-form" class="predict-form" onsubmit="return false">
+                        <label class="field-label" for="pr-date">DELIVERY DATE</label>
+                        <input type="date" id="pr-date">
+                        <div class="field-hint" id="pr-date-hint"></div>
+
+                        <label class="field-label">TARGETS</label>
+                        <div id="pr-targets" class="check-list"></div>
+
+                        <label class="field-label" for="pr-model">MODEL</label>
+                        <select id="pr-model"></select>
+                        <div class="field-hint">Champion = best model from the latest backtest. Other models are trained on demand on the latest data.</div>
+
+                        <label class="check-inline"><input type="checkbox" id="pr-refresh" checked> Fetch latest data first</label>
+                        <label class="check-inline"><input type="checkbox" id="pr-retrain"> Retrain on latest data first</label>
+
+                        <button class="btn-job btn-primary" id="pr-run" type="button">RUN PREDICTION</button>
+                        <div class="pr-status" id="pr-status"></div>
+                    </form>
+                </div>
+                <div class="bento-cell area-chart">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--amber"></span>RESULT — <span id="pr-view-date">--</span></div>
+                        <div class="cell-controls">
+                            <label class="toggle" title="Overlay earlier predictions for the days before, to compare with what actually happened">
+                                <input type="checkbox" id="pr-show-prev"><span class="toggle-track"></span>PREVIOUS PREDICTIONS
+                            </label>
+                            <select id="pr-prev-days" title="How many earlier days to show" hidden>
+                                <option value="3">3 days</option><option value="7" selected>7 days</option>
+                                <option value="14">14 days</option><option value="30">30 days</option>
+                            </select>
+                            <select id="pr-view-target"></select>
+                            <span class="bento-badge" id="pr-view-models">--</span>
+                        </div>
+                    </div>
+                    <div class="bento-chart-canvas"><canvas id="pr-chart"></canvas></div>
+                </div>
+                <div class="bento-cell area-summary">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--up"></span>SUMMARY</div><span class="bento-badge" id="pr-prev-badge" hidden></span></div>
+                    <div class="table-wrap"><table class="data-table" id="pr-summary"></table></div>
+                </div>
+                <div class="bento-cell area-history">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot"></span>PREDICTION HISTORY</div><span class="bento-badge">click a row to view</span></div>
+                    <div class="table-wrap"><table class="data-table clickable" id="pr-history"></table></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ BACKTEST ═══ -->
+        <section class="tab-pane" id="tab-backtest">
+            <div class="bento-grid backtest-grid">
+                <div class="bento-cell area-form">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>RUN BACKTEST</div></div>
+                    <form id="bt-form" class="predict-form" onsubmit="return false">
+                        <label class="field-label" for="bt-end">LAST TEST DAY</label>
+                        <input type="date" id="bt-end">
+                        <label class="field-label" for="bt-days">DAYS TO TEST</label>
+                        <input type="number" id="bt-days" min="1" max="730" step="1">
+                        <label class="field-label" for="bt-retrain">RETRAIN EVERY (DAYS)</label>
+                        <input type="number" id="bt-retrain" min="1" max="365" step="1">
+                        <label class="field-label" for="bt-train-days">TRAINING WINDOW (DAYS)</label>
+                        <input type="number" id="bt-train-days" min="30" max="3650" step="1">
+                        <div class="field-hint" id="bt-range-hint"></div>
+
+                        <label class="field-label">TARGETS</label>
+                        <div id="bt-targets" class="check-list"></div>
+                        <label class="field-label">MODELS</label>
+                        <div id="bt-models" class="check-list"></div>
+
+                        <label class="check-inline"><input type="checkbox" id="bt-set-champions" checked> Set champions from this run</label>
+                        <div class="field-hint" id="bt-estimate"></div>
+
+                        <button class="btn-job btn-primary" id="bt-go" type="button">RUN BACKTEST</button>
+                        <div class="progress" id="bt-progress" hidden><div class="progress-bar" id="bt-progress-bar"></div></div>
+                        <div class="pr-status" id="bt-status"></div>
+                    </form>
+                </div>
+                <div class="bento-cell area-chart">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>WALK-FORWARD: ACTUAL VS MODELS</div>
+                        <div class="cell-controls">
+                            <select id="bt-run"></select>
+                            <select id="bt-target">{% for t in targets %}<option value="{{ t }}">{{ t }}</option>{% endfor %}</select>
+                        </div>
+                    </div>
+                    <div class="bento-chart-canvas"><canvas id="bt-chart"></canvas></div>
+                </div>
+                <div class="bento-cell area-table">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--up"></span>LEADERBOARD</div><span class="bento-badge" id="bt-range">--</span></div>
+                    <div class="table-wrap"><table class="data-table" id="bt-table"></table></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ TRADING (paper) ═══ -->
+        <section class="tab-pane" id="tab-trading">
+            <div class="bento-grid trading-grid">
+                <div class="bento-cell area-form">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>PAPER TRADING</div><span class="bento-badge">DEMO ONLY</span></div>
+                    <form id="tr-form" class="predict-form" onsubmit="return false">
+                        <div class="sc-state" id="tr-state">--</div>
+                        <div class="field-hint" id="tr-ig"></div>
+                        <div class="tr-kpis" id="tr-kpis"></div>
+
+                        <label class="field-label">AUTO-TRADE</label>
+                        <div class="sc-refresh">
+                            <label class="toggle"><input type="checkbox" id="tr-enabled"><span class="toggle-track"></span>EVERY</label>
+                            <input type="number" id="tr-interval" min="5" max="1440" step="5"><span class="field-hint">min</span>
+                        </div>
+                        <div class="field-hint" id="tr-next"></div>
+                        <label class="toggle"><input type="checkbox" id="tr-mirror"><span class="toggle-track"></span>MIRROR TRADES TO IG DEMO ACCOUNT</label>
+
+                        <div class="tr-two">
+                            <div><label class="field-label" for="tr-size">SIZE (CONTRACTS)</label>
+                                <input type="number" id="tr-size" min="0.01" step="0.01"></div>
+                            <div><label class="field-label" for="tr-k">THRESHOLD (× SPREAD)</label>
+                                <input type="number" id="tr-k" min="0" max="50" step="0.1"></div>
+                        </div>
+                        <div class="field-hint">Trades only when the predicted move over the next <span id="tr-horizon">6</span> hours is bigger than this many spreads; a weaker signal keeps a position that agrees with it and closes one that doesn't.</div>
+                        <button class="btn-job" id="tr-save" type="button">SAVE</button>
+
+                        <div class="sc-row">
+                            <button class="btn-job btn-primary" id="tr-cycle" type="button">RUN CYCLE NOW</button>
+                            <button class="btn-job" id="tr-close" type="button">CLOSE POSITION</button>
+                        </div>
+                        <div class="pr-status" id="tr-status"></div>
+
+                        <label class="field-label" for="tr-bt-days">STRATEGY BACKTEST (DAYS)</label>
+                        <div class="sc-row">
+                            <input type="number" id="tr-bt-days" min="7" max="730" step="1">
+                            <button class="btn-job" id="tr-bt-go" type="button">BACKTEST + TRAIN</button>
+                        </div>
+                        <div class="field-hint">Walk-forward test with fills at the bid/ask and overnight funding, then refits the live model. Also runs as the STRATEGY step of the daily pipeline.</div>
+                        <button class="btn-link tr-reset" id="tr-reset" type="button">RESET PAPER ACCOUNT</button>
+                    </form>
+                </div>
+                <div class="bento-cell area-chart">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--amber"></span><span id="tr-market">MARKET</span></div>
+                        <div class="cell-controls">
+                            <span class="bento-badge" id="tr-quote">--</span>
+                            <select id="tr-days"><option value="2">2 days</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
+                        </div>
+                    </div>
+                    <div class="bento-chart-canvas"><canvas id="tr-chart"></canvas></div>
+                </div>
+                <div class="bento-cell area-equity">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--up"></span>PAPER EQUITY (GBP)</div><span class="bento-badge" id="tr-eq-badge">--</span></div>
+                    <div class="bento-chart-canvas"><canvas id="tr-equity"></canvas></div>
+                </div>
+                <div class="bento-cell area-bt">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>STRATEGY BACKTEST</div>
+                        <div class="cell-controls"><select id="tr-bt-run"></select></div>
+                    </div>
+                    <div class="tr-bt-summary" id="tr-bt-summary"></div>
+                    <div class="bento-chart-canvas tr-bt-chart"><canvas id="tr-bt-chart"></canvas></div>
+                </div>
+                <div class="bento-cell area-trades">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--up"></span>TRADES</div></div>
+                    <div class="table-wrap"><table class="data-table" id="tr-fills"></table></div>
+                </div>
+                <div class="bento-cell area-decisions">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--amber"></span>DECISIONS</div></div>
+                    <div class="table-wrap"><table class="data-table" id="tr-decisions"></table></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ SCHEDULE ═══ -->
+        <section class="tab-pane" id="tab-schedule">
+            <div class="bento-grid schedule-grid">
+                <div class="bento-cell area-form">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>DAILY PIPELINE</div></div>
+                    <form id="sc-form" class="predict-form" onsubmit="return false">
+                        <div class="sc-state" id="sc-state">--</div>
+                        <div class="field-hint" id="sc-next"></div>
+
+                        <label class="field-label" for="sc-time">RUN AT (UK TIME)</label>
+                        <input type="time" id="sc-time" step="60">
+
+                        <label class="field-label">STEPS (RUN IN THIS ORDER)</label>
+                        <div id="sc-steps" class="check-list"></div>
+                        <div class="field-hint">The backtest picks each target's champion model, training refits that champion on all the latest data, and predict uses it for tomorrow.</div>
+
+                        <label class="field-label" for="sc-bt-days">BACKTEST DAYS</label>
+                        <input type="number" id="sc-bt-days" min="1" max="365" step="1">
+
+                        <label class="field-label" for="sc-tune-days">TUNE DAYS</label>
+                        <input type="number" id="sc-tune-days" min="7" max="2000" step="1">
+                        <div class="field-hint">How much recent history each Optuna trial trains on. Shorter = faster trials, so more of them fit in the tuning time; the tuned settings are then used on the full training window.</div>
+
+                        <button class="btn-job btn-primary" id="sc-toggle" type="button">START SCHEDULE</button>
+                        <label class="field-label">KEEP DATA FRESH DURING THE DAY</label>
+                        <div class="sc-refresh">
+                            <label class="toggle"><input type="checkbox" id="sc-refresh-on"><span class="toggle-track"></span>FETCH EVERY</label>
+                            <input type="number" id="sc-refresh-min" min="5" max="1440" step="5"><span class="field-hint">min</span>
+                        </div>
+                        <div class="sc-fetch">
+                            <button class="btn-job btn-fetch" data-fetch-now type="button">⟳ FETCH NOW</button>
+                            <span class="fetch-status" data-fetch-status></span>
+                        </div>
+                        <div class="field-hint" id="sc-refresh-next">Downloads the latest prices, demand and weather forecast so charts show today's actuals. Applies straight away.</div>
+                        <div class="sc-row">
+                            <button class="btn-job" id="sc-save" type="button">SAVE CHANGES</button>
+                            <button class="btn-job" id="sc-run-now" type="button">RUN NOW</button>
+                        </div>
+                        <div class="pr-status" id="sc-status"></div>
+                        <div class="field-hint">Runs while the dashboard server is running. The schedule is kept in data/schedule.json, so it survives restarts.</div>
+                    </form>
+                </div>
+                <div class="bento-cell area-chart">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--amber"></span><span id="sc-run-title">LATEST RUN</span></div>
+                        <div class="cell-controls">
+                            <button class="btn-link" id="sc-latest" type="button" hidden>◂ LATEST RUN</button>
+                            <span class="bento-badge" id="sc-run-meta">--</span>
+                        </div>
+                    </div>
+                    <div class="pipeline" id="sc-pipeline"></div>
+                    <pre class="job-output sc-detail" id="sc-run-detail"></pre>
+                    <div class="sc-log-head">
+                        <span class="sc-log-title" id="sc-log-title">LOG</span>
+                        <span class="field-hint" id="sc-log-meta">Click a step above to see its log.</span>
+                        <label class="toggle sc-log-warn"><input type="checkbox" id="sc-log-warn"><span class="toggle-track"></span>WARNINGS ONLY</label>
+                    </div>
+                    <div class="log-box" id="sc-log"></div>
+                </div>
+                <div class="bento-cell area-table">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--up"></span>RUN HISTORY</div></div>
+                    <div class="table-wrap"><table class="data-table clickable" id="sc-history"></table></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ DATA ═══ -->
+        <section class="tab-pane" id="tab-data">
+            <div class="bento-grid data-grid">
+                <div class="bento-cell area-table">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>SOURCES</div>
+                        <div class="cell-controls">
+                            <span class="fetch-status" data-fetch-status></span>
+                            <button class="btn-job btn-fetch" data-fetch-now type="button">⟳ FETCH NOW</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap"><table class="data-table" id="sources-table"></table></div>
+                </div>
+                <div class="bento-cell area-chart">
+                    <div class="bento-cell-header">
+                        <div class="bento-cell-title"><span class="bento-dot bento-dot--amber"></span>EXPLORER</div>
+                        <div class="cell-controls">
+                            <select id="ex-dataset"></select>
+                            <select id="ex-column"></select>
+                            <select id="ex-days"><option>3</option><option selected>7</option><option>30</option><option>90</option><option>365</option></select>
+                        </div>
+                    </div>
+                    <div class="bento-chart-canvas"><canvas id="ex-chart"></canvas></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ RUNS ═══ -->
+        <section class="tab-pane" id="tab-runs">
+            <div class="bento-grid single-grid">
+                <div class="bento-cell">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--up"></span>PIPELINE RUNS</div></div>
+                    <div class="table-wrap"><table class="data-table" id="runs-table"></table></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ CONFIG ═══ -->
+        <section class="tab-pane" id="tab-config">
+            <div class="bento-grid config-grid">
+                <div class="bento-cell">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--cyan"></span>PREDICTION / TRAINING PARAMETERS</div></div>
+                    <form id="settings-form" class="settings-form"></form>
+                </div>
+                <div class="bento-cell">
+                    <div class="bento-cell-header"><div class="bento-cell-title"><span class="bento-dot bento-dot--amber"></span>SOURCES ENABLED</div></div>
+                    <div id="sources-form" class="settings-form"></div>
+                    <div class="settings-actions"><button class="btn-job" id="save-settings">SAVE TO overrides.yaml</button></div>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+<div class="app-toast" id="toast"></div>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

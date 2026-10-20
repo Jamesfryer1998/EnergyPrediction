@@ -1,0 +1,16 @@
+[Unit]
+Description=EnergyPrediction nightly pipeline (ingest, tune, backtest, train, predict)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=energy
+Group=energy
+WorkingDirectory=/opt/energy-prediction/app
+EnvironmentFile=-/etc/energy-prediction.env
+Environment=ENERGY_DATA_DIR=/var/lib/energy-prediction/data
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/energy-prediction/env/bin/python main.py nightly
+TimeoutStartSec=6h
+Nice=10

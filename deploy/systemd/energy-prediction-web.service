@@ -1,0 +1,21 @@
+[Unit]
+Description=EnergyPrediction dashboard (Flask via gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=energy
+Group=energy
+WorkingDirectory=/opt/energy-prediction/app
+EnvironmentFile=-/etc/energy-prediction.env
+Environment=ENERGY_DATA_DIR=/var/lib/energy-prediction/data
+Environment=PYTHONUNBUFFERED=1
+# One worker: the dashboard's job runner keeps state in-process. Threads handle concurrency.
+ExecStart=/opt/energy-prediction/env/bin/gunicorn --workers 1 --threads 8 --timeout 120 \
+          --bind 0.0.0.0:5050 "web:create_app()"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

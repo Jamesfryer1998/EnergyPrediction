@@ -1,0 +1,10 @@
+name: EnergyPrediction
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  # LightGBM from conda-forge ships its own OpenMP runtime (avoids `brew install libomp` on macOS)
+  - lightgbm>=4.5
+  - pip:
+      - -r requirements.txt

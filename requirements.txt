@@ -1,0 +1,23 @@
+# Core data
+pandas>=2.2
+numpy>=2.0
+pyarrow>=17.0
+duckdb>=1.1
+requests>=2.32
+PyYAML>=6.0
+openpyxl>=3.1      # gas (ONS) and carbon (EEX) spreadsheets
+lxml>=5.0          # HTML tables (Met Office storms, GOV.UK carbon prices)
+
+# ML
+scikit-learn>=1.5
+lightgbm>=4.5
+optuna>=4.0
+torch>=2.6
+
+# Web
+flask>=3.0
+gunicorn>=23.0
+
+# Dev
+pytest>=8.0
+ruff>=0.6

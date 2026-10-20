@@ -1,0 +1,17 @@
+[project]
+name = "energy-prediction"
+version = "0.1.0"
+description = "Energy data aggregation, price/demand forecasting, model comparison and backtesting"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
