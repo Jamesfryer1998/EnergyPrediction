@@ -6,11 +6,14 @@ through a self-hosted GitHub Actions runner. The runner
 checks out the commit and calls `src/deploy/deploy.sh`, which syncs the code, updates the conda
 env if dependencies changed, installs the systemd units and restarts the web service.
 
-Tested layout: an Ubuntu 24.04 VM or LXC (for example on the Proxmox box).
+Tested layout: an Ubuntu 24.04 VM or LXC (for example on the Proxmox box). Give it about 4
+cores, 8 GB RAM and 30 GB disk. The runner only makes outbound connections to GitHub, so
+nothing needs opening on your router.
 
 ## 1. User, folders, conda
 
 ```bash
+apt update && apt install -y sudo curl git rsync ca-certificates   # as root in a fresh container
 sudo adduser --system --group --shell /bin/bash --home /home/energy energy
 sudo mkdir -p /opt/energy-prediction /var/lib/energy-prediction/data
 sudo chown -R energy:energy /opt/energy-prediction /var/lib/energy-prediction
@@ -61,8 +64,17 @@ IG_USERNAME=...
 IG_PASSWORD=...
 ```
 
-`sudo chmod 600 /etc/energy-prediction.env && sudo chown root:root /etc/energy-prediction.env`
-(systemd reads it as root before starting the service).
+`sudo chown root:energy /etc/energy-prediction.env && sudo chmod 640 /etc/energy-prediction.env`
+(only root and the `energy` user can read it).
+
+To use the CLI on the server with the same settings, as `energy`:
+
+```bash
+cd /opt/energy-prediction/app && conda activate EnergyPrediction
+set -a; . /etc/energy-prediction.env; set +a
+export ENERGY_DATA_DIR=/var/lib/energy-prediction/data
+python src/main.py ig-check
+```
 
 The dashboard has no login. Keep port 5050 on your LAN or VPN, or put it behind a reverse proxy
 with authentication. Don't expose it to the internet as it is.

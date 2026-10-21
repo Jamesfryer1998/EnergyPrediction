@@ -22,19 +22,36 @@ rsync -a --delete \
   "$SRC"/ "$APP_DIR"/
 
 # ── conda env: create on first deploy, update only when dependencies change ──
+# The server has no GPU, so torch is installed from PyTorch's CPU-only index first
+# (~200 MB). From PyPI it would pull ~3 GB of CUDA libraries.
+TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cpu}"
 # shellcheck disable=SC1091
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 DEPS_HASH=$(cat "$APP_DIR/environment.yml" "$APP_DIR/requirements.txt" | sha256sum | cut -d' ' -f1)
 HASH_FILE="$APP_ROOT/.deps_hash"
-if ! conda env list | grep -qE "^$ENV_NAME\s"; then
-  echo "==> Creating conda env $ENV_NAME"
-  (cd "$APP_DIR" && conda env create -n "$ENV_NAME" -f environment.yml)
-  echo "$DEPS_HASH" > "$HASH_FILE"
-elif [[ "$(cat "$HASH_FILE" 2>/dev/null)" != "$DEPS_HASH" ]]; then
-  echo "==> Dependencies changed; updating env"
+
+install_pip_deps() {
   conda activate "$ENV_NAME"
-  pip install -r "$APP_DIR/requirements.txt"
+  pip install --no-cache-dir "$(grep -E '^torch' "$APP_DIR/requirements.txt" | awk '{print $1}')" \
+    --index-url "$TORCH_INDEX"
+  pip install --no-cache-dir -r "$APP_DIR/requirements.txt"
   conda deactivate
+}
+
+env_exists() { conda env list | grep -qE "^$ENV_NAME\s"; }
+
+if ! env_exists || [[ ! -f "$HASH_FILE" ]]; then
+  # No hash file means the env was never finished (e.g. an earlier deploy failed part-way): rebuild it.
+  echo "==> Creating conda env $ENV_NAME"
+  env_exists && conda env remove -y -n "$ENV_NAME"
+  # conda packages only; the pip section is installed by install_pip_deps
+  sed '/^  - pip:/,$d' "$APP_DIR/environment.yml" > "$APP_ROOT/environment.conda.yml"
+  conda env create -n "$ENV_NAME" -f "$APP_ROOT/environment.conda.yml"
+  install_pip_deps
+  echo "$DEPS_HASH" > "$HASH_FILE"
+elif [[ "$(cat "$HASH_FILE")" != "$DEPS_HASH" ]]; then
+  echo "==> Dependencies changed; updating env"
+  install_pip_deps
   echo "$DEPS_HASH" > "$HASH_FILE"
 fi
 ln -sfn "$(conda env list | awk -v n="$ENV_NAME" '$1==n {print $NF}')" "$APP_ROOT/env"
