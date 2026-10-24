@@ -382,3 +382,17 @@ def test_ig_prices_one_request_per_run_and_single_download(tmp_path, monkeypatch
         other._client = src._client
         assert other.update().status == "skipped"
     assert len([c for c in http.calls if "/prices/" in c[1]]) == 2
+
+
+def test_funding_cutoffs_across_clock_changes():
+    from trading.strategy import nights_between
+
+    tz = "Europe/London"
+    # 25 Oct 2026, clocks went back at 02:00: the 22:00 cut-off is 22:00 GMT (22:00 UTC)
+    assert nights_between("2026-10-25T21:15:00+00:00", "2026-10-25T22:15:00+00:00", tz) == 1
+    assert nights_between("2026-10-25T21:15:00+00:00", "2026-10-25T21:45:00+00:00", tz) == 0
+    # summer: 22:00 BST is 21:00 UTC
+    assert nights_between("2026-07-01T20:30:00+00:00", "2026-07-01T21:30:00+00:00", tz) == 1
+    # a week spanning the change counts each night once
+    assert nights_between("2026-10-21T12:00:00+00:00", "2026-10-28T12:00:00+00:00", tz) == 7
+    assert nights_between(None, "2026-10-28T12:00:00+00:00", tz) == 0

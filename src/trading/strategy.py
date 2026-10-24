@@ -228,12 +228,12 @@ def nights_between(prev_ts, ts, tz: str) -> int:
     if prev_ts is None:
         return 0
     a, b = pd.Timestamp(prev_ts).tz_convert(tz), pd.Timestamp(ts).tz_convert(tz)
-    first = a.normalize() + pd.Timedelta(hours=22)
-    if first <= a:
-        first += pd.Timedelta(days=1)
-    if first > b:
+    if b <= a:
         return 0
-    return int((b - first) / pd.Timedelta(days=1)) + 1
+    # 22:00 local on each calendar day (not a+24h steps, which drift an hour across a clock change)
+    days = pd.date_range(a.date(), b.date(), freq="D")
+    cutoffs = (days + pd.Timedelta(hours=22)).tz_localize(tz)
+    return int(((cutoffs > a) & (cutoffs <= b)).sum())
 
 
 def simulate(f: pd.DataFrame, candles: pd.DataFrame, preds: pd.Series, cfg: StrategyConfig) -> dict:

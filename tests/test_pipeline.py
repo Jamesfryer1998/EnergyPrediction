@@ -648,3 +648,35 @@ def test_tuning_study_generations_reset(tmp_path):
     name3, new3, _ = art.study_generation("demand", "hgb", 7)
     assert new3 and name3 == "GB:demand:hgb:g2"
     assert not art.study_generation("demand", "hgb", 0)[1]  # 0 = never reset
+
+
+def test_day_bounds_cover_clock_change_days(tmp_path):
+    from datetime import date
+
+    from prediction.predictor import Predictor
+
+    settings, store = make_env(tmp_path)
+    pr = Predictor(settings, store)
+    half_hours = {d: (lambda s, e: (e - s) / pd.Timedelta(minutes=30))(*pr.day_bounds(d))
+                  for d in (date(2026, 10, 24), date(2026, 10, 25), date(2026, 3, 29))}
+    # normal day, clocks go back (25 hours), clocks go forward (23 hours)
+    assert half_hours == {date(2026, 10, 24): 48, date(2026, 10, 25): 50, date(2026, 3, 29): 46}
+    start, end = pr.day_bounds(date(2026, 10, 25))
+    assert str(start) == "2026-10-24 23:00:00+00:00" and str(end) == "2026-10-26 00:00:00+00:00"
+
+
+def test_predict_on_the_day_the_clocks_go_back(tmp_path, monkeypatch):
+    from datetime import date
+
+    import prediction.predictor as predmod
+    from prediction.predictor import Predictor
+
+    settings, store = make_env(tmp_path)
+    populate(store, days=200)
+    pr = Predictor(settings, store)
+    pr.train_champions()
+    day = date(2026, 10, 25)  # clocks go back: 50 half-hours
+    monkeypatch.setattr(predmod.Predictor, "max_predictable_date", lambda self, t: day)
+    preds = pr.predict_day(day)
+    assert not preds.empty
+    assert (preds.groupby("target").size() == 50).all()

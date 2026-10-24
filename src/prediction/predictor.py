@@ -30,8 +30,11 @@ class Predictor:
 
     # ── helpers ──────────────────────────────────────────────────────────
     def day_bounds(self, day: date) -> tuple[pd.Timestamp, pd.Timestamp]:
+        # Local midnight to the next local midnight: 48 half-hours normally, 46 or 50 on clock-change
+        # days. (Adding 24h to an aware timestamp and normalising lands back on the same midnight
+        # when the clocks go back, giving an empty day.)
         start = pd.Timestamp(day).tz_localize(self.tz)
-        end = (start + pd.Timedelta(days=1)).normalize()
+        end = (pd.Timestamp(day) + pd.Timedelta(days=1)).tz_localize(self.tz)
         return start.tz_convert("UTC"), end.tz_convert("UTC")
 
     def tomorrow(self) -> date:

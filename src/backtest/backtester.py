@@ -262,7 +262,8 @@ def _walk(fs: FeatureSet, target: str, model_name: str, test_days, settings: Set
     model, out = None, []
     for i, day in enumerate(test_days):
         day_utc = day.tz_convert("UTC")
-        nxt = (day + pd.Timedelta(days=1)).normalize().tz_convert("UTC")  # DST-safe local midnight
+        # next local midnight (calendar arithmetic, so clock-change days keep all 46/50 periods)
+        nxt = (day.tz_localize(None).normalize() + pd.Timedelta(days=1)).tz_localize(day.tz).tz_convert("UTC")
         if model is None or i % retrain_every == 0:
             cutoff = day_utc - pd.Timedelta(days=1)  # info set at D-1 morning, conservatively
             model, _ = fit_model(fs, target, model_name, cutoff, settings, params)

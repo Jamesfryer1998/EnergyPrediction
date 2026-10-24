@@ -209,7 +209,7 @@ def create_app() -> Flask:
         days = max(1, min(int(request.args.get("days", 7)), 90))
         tz = s.timezone
         win_start = pd.Timestamp(end_day - pd.Timedelta(days=days)).tz_localize(tz).tz_convert("UTC")
-        win_end = (pd.Timestamp(end_day).tz_localize(tz) + pd.Timedelta(days=1)).normalize().tz_convert("UTC")
+        win_end = (pd.Timestamp(end_day) + pd.Timedelta(days=1)).tz_localize(tz).tz_convert("UTC")
         out = {"target": target, "window_start": win_start.isoformat(), "series": {}, "hindsight_days": {},
                "genuine_days": {}, "mae": {}, "actual": []}
         tcfg = s.targets[target]
