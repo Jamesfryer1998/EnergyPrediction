@@ -253,7 +253,9 @@ def test_trading_web_api_and_settings(tmp_path, monkeypatch):
     client = web.create_app().test_client()
     st = client.get("/api/trading/status").get_json()
     assert st["position"] == 0 and st["state"]["enabled"] is False
-    assert client.post("/api/trading/settings", json={"interval_minutes": 1}).status_code == 400
+    assert client.post("/api/trading/settings", json={"interval_minutes": 0}).status_code == 400
+    assert client.post("/api/trading/settings", json={"interval_minutes": 1441}).status_code == 400
+    assert client.post("/api/trading/settings", json={"interval_minutes": 1}).get_json()["interval_minutes"] == 1
     r = client.post("/api/trading/settings", json={"enabled": True, "interval_minutes": 30, "size": 3}).get_json()
     assert r["enabled"] is True and r["interval_minutes"] == 30 and r["size"] == 3
     assert client.get("/api/trading/chart?days=400").get_json()["candles"]
@@ -280,6 +282,56 @@ def test_trading_runner_schedule():
     assert not tr.due({"enabled": True, "last_cycle": "2026-10-07T09:30:00+00:00", "interval_minutes": 60}, wed)
     assert tr.due({"enabled": True, "last_cycle": "2026-10-07T08:59:00+00:00", "interval_minutes": 60}, wed)
     assert not tr.due({"enabled": True, "last_cycle": None}, datetime(2026, 10, 10, 10, tzinfo=timezone.utc))  # Sat
+
+
+def test_trading_runner_one_minute_interval_and_failure_backoff():
+    from datetime import datetime, timedelta, timezone
+
+    from web.trading_runner import TradingRunner
+
+    tr = TradingRunner(lambda: None)
+    now = datetime(2026, 10, 7, 10, 0, tzinfo=timezone.utc)
+    st = {"enabled": True, "last_cycle": (now - timedelta(seconds=61)).isoformat(), "interval_minutes": 1}
+    tr._last_attempt = now - timedelta(seconds=61)  # a successful cycle a minute ago doesn't hold the next one back
+    assert tr.due(st, now)
+    assert not tr.due({**st, "last_cycle": (now - timedelta(seconds=30)).isoformat()}, now)
+    tr._last_failed = True  # after a failure, wait FAILURE_BACKOFF before retrying
+    assert not tr.due(st, now)
+    assert tr.due(st, now + timedelta(minutes=5))
+
+
+def test_ig_session_is_shared_between_processes(tmp_path, monkeypatch):
+    import os
+    import time
+
+    import trading.ig as igmod
+    from trading.ig import IGClient
+
+    monkeypatch.setattr(igmod, "MIN_INTERVAL", 0)
+    sf = tmp_path / "ig_session.json"
+
+    def logins(h):
+        return sum(1 for c in h.calls if c[0] == "POST")
+
+    h1 = FakeHTTP()
+    IGClient("key", "user", "pw", session=h1, session_file=sf).market("CC.D.GAS.IP")
+    assert logins(h1) == 1 and sf.exists()
+    assert oct(os.stat(sf).st_mode & 0o777) == "0o600"  # tokens readable by the owner only
+
+    h2 = FakeHTTP()  # a later cycle (new process) reuses the saved session: no new login
+    IGClient("key", "user", "pw", session=h2, session_file=sf).market("CC.D.GAS.IP")
+    assert logins(h2) == 0
+
+    h3 = FakeHTTP()  # different credentials never pick up someone else's session
+    IGClient("key2", "user", "pw", session=h3, session_file=sf).market("CC.D.GAS.IP")
+    assert logins(h3) == 1
+
+    data = json.loads(sf.read_text())
+    data["login_at"] = time.time() - igmod.SESSION_MAX_AGE - 1  # stale session: log in again
+    sf.write_text(json.dumps(data))
+    h4 = FakeHTTP()
+    IGClient("key2", "user", "pw", session=h4, session_file=sf).market("CC.D.GAS.IP")
+    assert logins(h4) == 1
 
 
 def test_strategy_step_fetches_ig_prices_first(tmp_path, monkeypatch):

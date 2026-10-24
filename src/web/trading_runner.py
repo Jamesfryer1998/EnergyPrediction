@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 log = logging.getLogger(__name__)
 
 CYCLE_TIMEOUT = 15 * 60  # seconds; a cycle is normally a few seconds
+FAILURE_BACKOFF = timedelta(minutes=5)  # wait this long after a failed cycle before retrying
 
 
 def _cycle_entry(raw_settings: dict, settings_path: str, args: dict) -> dict:
@@ -29,6 +30,7 @@ class TradingRunner:
         self.current: dict | None = None
         self.last: dict | None = None
         self._last_attempt: datetime | None = None
+        self._last_failed = False
 
     def busy(self) -> bool:
         return self.current is not None
@@ -52,9 +54,11 @@ class TradingRunner:
             res = run_isolated(_cycle_entry, s.raw, str(s.path or ""), args, label="paper trade cycle",
                                timeout=CYCLE_TIMEOUT)
             info.update(status="ok", result=res)
+            self._last_failed = False
         except Exception as exc:
             log.warning("paper trade cycle failed: %s", str(exc).split("\n")[0])
             info.update(status="error", error=str(exc).split("\n")[0])
+            self._last_failed = True
         info["finished"] = _now()
         with self._lock:
             self.last, self.current = info, None
@@ -66,8 +70,8 @@ class TradingRunner:
         now = now or datetime.now(timezone.utc)
         if now.weekday() >= 5:  # gas CFDs don't trade at weekends
             return False
-        if self._last_attempt and now - self._last_attempt < timedelta(minutes=5):  # don't hammer after a failure
-            return False
+        if self._last_failed and self._last_attempt and now - self._last_attempt < FAILURE_BACKOFF:
+            return False  # don't hammer IG after a failure
         last = state.get("last_cycle")
         if not last:
             return True

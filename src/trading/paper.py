@@ -63,8 +63,8 @@ def update_state(settings: Settings, changes: dict) -> dict:
         st["mirror_ig"] = bool(changes["mirror_ig"])
     if "interval_minutes" in changes:
         v = int(changes["interval_minutes"])
-        if not 5 <= v <= 1440:
-            raise ValueError("interval must be 5-1440 minutes")
+        if not 1 <= v <= 1440:
+            raise ValueError("interval must be 1-1440 minutes")
         st["interval_minutes"] = v
     for key, lo, hi in (("size", 0.01, 1000), ("threshold_k", 0.0, 50)):
         if key in changes:
@@ -165,7 +165,7 @@ def run_cycle(settings: Settings, region: str = "GB", client=None, force_target:
     if live and client is None:
         from .ig import IGClient
 
-        client = IGClient()
+        client = IGClient(session_file=trading_dir(settings) / "ig_session.json")
     note = []
 
     # 1. fresh candles + a live quote (or the last candle when there's no IG login, e.g. demo data)

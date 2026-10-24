@@ -8,6 +8,8 @@ optionally IG_ACCOUNT_ID.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import tempfile
@@ -49,6 +51,8 @@ class IGRateLimited(IGError):
 
 # After a failed login, don't try again for a while (per username, across clients in this process).
 LOGIN_BACKOFF = 15 * 60
+# IG sessions expire after 6 hours idle; log in again well before that
+SESSION_MAX_AGE = 4 * 3600
 _login_blocked: dict[str, tuple[float, str]] = {}
 # Seconds between requests, across every process on this machine (web server, jobs, trading
 # cycles): IG's demo API allows roughly 30 non-trading requests a minute per API key.
@@ -80,7 +84,8 @@ class IGClient:
     """Session handling, market lookup, price history, quotes and (demo) orders."""
 
     def __init__(self, api_key: str | None = None, username: str | None = None, password: str | None = None,
-                 account_id: str | None = None, session: requests.Session | None = None, timeout: float = 20.0):
+                 account_id: str | None = None, session: requests.Session | None = None, timeout: float = 20.0,
+                 session_file: str | Path | None = None):
         self.api_key = api_key or os.environ.get("IG_API_KEY")
         self.username = username or os.environ.get("IG_USERNAME")
         self.password = password or os.environ.get("IG_PASSWORD")
@@ -95,6 +100,10 @@ class IGClient:
         self._lock = threading.Lock()
         self.account: dict = {}
         self.last_allowance: dict | None = None
+        # Optional file to share the login between processes (each trading cycle is a new process;
+        # without it a 1-minute interval would mean ~1,400 logins a day and IG would lock the key).
+        self.session_file = Path(session_file) if session_file else None
+        self._load_session()
 
     # ── low level ────────────────────────────────────────────────────────
     _last_request = 0.0  # fallback when the shared throttle file can't be used
@@ -138,6 +147,36 @@ class IGClient:
             h.update(self._tokens)
         return h
 
+    # ── shared session ───────────────────────────────────────────────────
+    def _session_owner(self) -> str:
+        return hashlib.sha256(f"{self.api_key}|{self.username}|{self.account_id or ''}".encode()).hexdigest()[:16]
+
+    def _load_session(self) -> None:
+        if not self.session_file:
+            return
+        try:
+            data = json.loads(self.session_file.read_text())
+        except (OSError, ValueError):
+            return
+        age = time.time() - float(data.get("login_at", 0))
+        if data.get("owner") == self._session_owner() and 0 <= age < SESSION_MAX_AGE and data.get("tokens"):
+            self._tokens, self._login_at = dict(data["tokens"]), float(data["login_at"])
+            self.account = data.get("account") or {}
+
+    def _save_session(self) -> None:
+        if not self.session_file:
+            return
+        try:
+            self.session_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.session_file.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # tokens: owner-only
+            with os.fdopen(fd, "w") as fh:
+                json.dump({"owner": self._session_owner(), "login_at": self._login_at,
+                           "tokens": self._tokens, "account": self.account}, fh)
+            os.replace(tmp, self.session_file)
+        except OSError as exc:
+            log.debug("could not save IG session: %s", exc)
+
     def login(self) -> dict:
         with self._lock:
             if "@" in self.username:  # IG rejects emails here; don't spend a login attempt on it
@@ -165,13 +204,14 @@ class IGClient:
         if self.account_id and self.account_id != self.account.get("account_id"):
             self.request("PUT", "/session", 1, {"accountId": self.account_id, "defaultAccount": False})
             self.account["account_id"] = self.account_id
+        self._save_session()
         log.info("IG demo: logged in (account %s)", self.account.get("account_id"))
         return self.account
 
     def request(self, method: str, path: str, version: int = 1, body: Any = None, params: dict | None = None,
                 extra_headers: dict | None = None) -> Any:
         # sessions last 6 hours without activity; refresh well before that
-        if not self._tokens or time.time() - self._login_at > 4 * 3600:
+        if not self._tokens or time.time() - self._login_at > SESSION_MAX_AGE:
             self.login()
         for attempt in range(3):
             headers = self._headers(version) | (extra_headers or {})
