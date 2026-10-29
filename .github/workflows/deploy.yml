@@ -15,7 +15,8 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Deploy after CI passes on a push to main (not after the nightly scheduled test run)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
     runs-on: [self-hosted, energy-prediction]
     environment: production
     # deploy.sh waits (up to DEPLOY_WAIT_MINUTES, default 60) for a running pipeline job or
