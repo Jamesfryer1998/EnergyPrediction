@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -78,7 +78,11 @@ class Backtester:
             e = pd.Timestamp(end)
             end_ts = self._local_midnight(e.tz_localize(self.settings.timezone) if e.tzinfo is None else e)
             end_ts = min(end_ts, latest_end)
-        start_ts = end_ts - pd.Timedelta(days=days)
+        # Count back whole calendar days in UK time. (end - N*24h lands on 01:00 BST, not midnight,
+        # once a clock change is inside the window, and 01:00 on the October change day is ambiguous.)
+        tz = self.settings.timezone
+        end_day = end_ts.tz_convert(tz).date()
+        start_ts = pd.Timestamp(end_day - timedelta(days=days)).tz_localize(tz).tz_convert("UTC")
         first = min((self.store.first_timestamp(self.settings.targets[t]["source"], self.region) for t in targets),
                     default=None, key=lambda x: x or pd.Timestamp.max.tz_localize("UTC"))
         if first is not None and start_ts - pd.Timedelta(days=30) < first:
@@ -89,8 +93,8 @@ class Backtester:
                 start_ts - pd.Timedelta(days=train_days + 2), end_ts
             )
 
-        test_days = pd.date_range(start_ts.tz_convert(self.settings.timezone), end_ts.tz_convert(self.settings.timezone),
-                                  freq="1D", inclusive="left")
+        # one local midnight per day (midnight is never ambiguous in the UK; the change is at 01:00/02:00)
+        test_days = pd.date_range(end_day - timedelta(days=days), end_day, freq="D", inclusive="left").tz_localize(tz)
         all_preds, leaderboard = [], []
         self._leaderboard = leaderboard  # shared with _ensembles()
         tasks = [(t, m) for t in targets for m in models]

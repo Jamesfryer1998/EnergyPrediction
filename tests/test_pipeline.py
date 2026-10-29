@@ -5,6 +5,7 @@ from helpers import make_env
 
 from backtest import Backtester
 from sources.synthetic import populate
+from storage import TS
 from evaluation import regression_metrics
 from features import FeatureBuilder
 from prediction import Predictor
@@ -680,3 +681,20 @@ def test_predict_on_the_day_the_clocks_go_back(tmp_path, monkeypatch):
     preds = pr.predict_day(day)
     assert not preds.empty
     assert (preds.groupby("target").size() == 50).all()
+
+
+def test_backtest_window_across_the_clocks_going_back(tmp_path):
+    # a window ending after 25 Oct 2026 used to start at 01:00 BST and crash on the ambiguous 01:00
+    from sources.synthetic import generate
+
+    settings, store = make_env(tmp_path)
+    for name, df in generate(200, end=pd.Timestamp("2026-11-05", tz="UTC")).items():  # fixed dates
+        store.write(name, "GB", df)
+    res = Backtester(settings, store).run(end="2026-10-29", days=7, models=["seasonal_naive"], set_champions=False)
+    assert res["start"] == "2026-10-21T23:00:00+00:00"  # 22 Oct 00:00 BST
+    assert res["end"] == "2026-10-29T00:00:00+00:00"  # 29 Oct 00:00 GMT
+    preds = store.read("backtest_predictions", "GB")
+    preds = preds[(preds["run_id"] == res["run_id"]) & (preds["target"] == "price_mid")]
+    local_day = preds[TS].dt.tz_convert(settings.timezone).dt.date.astype(str)
+    per_day = local_day.value_counts()
+    assert len(per_day) == 7 and per_day["2026-10-25"] == 50 and per_day["2026-10-24"] == 48
