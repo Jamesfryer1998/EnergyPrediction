@@ -357,6 +357,8 @@ def test_strategy_step_fetches_ig_prices_first(tmp_path, monkeypatch):
 
 
 def test_ig_prices_one_request_per_run_and_single_download(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
     import trading.ig as igmod
     from sources import build_source
     from trading.ig import IGClient
@@ -371,8 +373,16 @@ def test_ig_prices_one_request_per_run_and_single_download(tmp_path, monkeypatch
     price_calls = [c for c in http.calls if "/prices/" in c[1]]
     assert res.status == "ok" and res.rows == 1 and len(price_calls) == 1  # whole history in one request
     assert store.last_timestamp("ig_gas", "GB") == pd.Timestamp("2026-10-08T09:00", tz="UTC")
-    src.update()                                                           # incremental: one more
-    assert len([c for c in http.calls if "/prices/" in c[1]]) == 2
+    import sources.ig_prices as igp
+
+    def prices():
+        return len([c for c in http.calls if "/prices/" in c[1]])
+
+    assert src.update().status == "skipped" and prices() == 1              # same hour: IG isn't asked again
+    later = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1, minutes=5)
+    monkeypatch.setattr(igp, "_utcnow", lambda: later)
+    src.update()                                                           # next hour: one incremental request
+    assert prices() == 2
     # while another process holds the download lock, it skips instead of calling IG
     import fcntl
 
@@ -396,3 +406,59 @@ def test_funding_cutoffs_across_clock_changes():
     # a week spanning the change counts each night once
     assert nights_between("2026-10-21T12:00:00+00:00", "2026-10-28T12:00:00+00:00", tz) == 7
     assert nights_between(None, "2026-10-28T12:00:00+00:00", tz) == 0
+
+
+class AllowanceUsedHTTP(FakeHTTP):
+    def request(self, method, url, json=None, params=None, headers=None, timeout=None):
+        if "/prices/" in url:
+            self.calls.append((method, url, json, headers))
+            return FakeResp(403, {"errorCode": "error.public-api.exceeded-account-historical-data-allowance"})
+        return super().request(method, url, json, params, headers, timeout)
+
+
+def test_ig_prices_at_most_hourly_and_back_off_when_allowance_used(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    import sources.ig_prices as igp
+    import trading.ig as igmod
+    from sources import build_source
+    from trading.ig import IGClient
+
+    monkeypatch.setattr(igmod, "MIN_INTERVAL", 0)
+    settings, store = make_env(tmp_path, trading={"epic": "CC.D.GAS.IP"})
+    clock = {"now": datetime(2026, 10, 30, 21, 10)}
+    monkeypatch.setattr(igp, "_utcnow", lambda: clock["now"])
+    http = FakeHTTP()
+    src = build_source("ig_gas", store=store, settings=settings)
+    src._client = IGClient("key", "user", "pw", session=http)
+    assert src.update().status == "ok"  # first download (history)
+
+    def prices():
+        return len([c for c in http.calls if "/prices/" in c[1]])
+
+    # the market is shut, so no new candles arrive: a cycle every minute must not hit IG every minute
+    clock["now"] = datetime(2026, 10, 30, 22, 5)
+    src.update()
+    assert prices() == 2
+    for minute in range(6, 60):
+        clock["now"] = datetime(2026, 10, 30, 22, minute)
+        assert src.update().status == "skipped"
+    assert prices() == 2
+    clock["now"] = datetime(2026, 10, 30, 23, 1)  # not until the hour's candle has closed
+    assert src.update().status == "skipped"
+    clock["now"] = datetime(2026, 10, 30, 23, 2)
+    src.update()
+    assert prices() == 3
+
+    # allowance used up: back off instead of asking (and failing) every hour
+    http.__class__ = AllowanceUsedHTTP
+    clock["now"] = datetime(2026, 10, 31, 0, 5)
+    res = src.update()
+    assert res.status == "error" and "allowance" in res.message and prices() == 4
+    for hours in range(1, 6):
+        clock["now"] = datetime(2026, 10, 31, 0, 5) + timedelta(hours=hours)
+        assert src.update().status == "skipped"
+    assert prices() == 4
+    clock["now"] = datetime(2026, 10, 31, 6, 6)
+    src.update()
+    assert prices() == 5
