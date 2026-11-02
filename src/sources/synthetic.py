@@ -16,8 +16,8 @@ def generate(days: int = 400, end: pd.Timestamp | None = None, seed: int = 7) ->
     n = len(idx)
     local = idx.tz_convert("Europe/London")
     hour = local.hour + local.minute / 60
-    doy = local.dayofyear.to_numpy()
-    weekend = (local.dayofweek >= 5).astype(float)
+    doy = local.day_of_year.to_numpy()
+    weekend = (local.day_of_week >= 5).astype(float)
 
     season = np.cos(2 * np.pi * (doy - 15) / 365)  # +1 mid-Jan, -1 mid-July
     temp = 10 - 7 * season + 4 * np.sin(2 * np.pi * (hour - 9) / 24) + rng.normal(0, 1.5, n)
@@ -67,9 +67,9 @@ def synthetic_gas_candles(days: int = 400, end: pd.Timestamp | None = None, seed
     rng = np.random.default_rng(seed + 1)
     end = (end or pd.Timestamp.now(tz="UTC")).floor("h")
     idx = pd.date_range(end - pd.Timedelta(days=days), end, freq="1h", inclusive="left", tz="UTC")
-    idx = idx[(idx.dayofweek < 5) & (idx.hour >= 7) & (idx.hour < 17)]
+    idx = idx[(idx.day_of_week < 5) & (idx.hour >= 7) & (idx.hour < 17)]
     n = len(idx)
-    doy = idx.dayofyear.to_numpy()
+    doy = idx.day_of_year.to_numpy()
     level = 85 + 20 * np.cos(2 * np.pi * (doy - 15) / 365)
     x = np.zeros(n)
     for i in range(1, n):  # OU deviation from the seasonal level, plus some short-term momentum

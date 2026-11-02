@@ -162,14 +162,14 @@ class FeatureBuilder:
     def _calendar(self, idx: pd.DatetimeIndex, start, end) -> pd.DataFrame:
         local = idx.tz_convert(self.settings.timezone)
         sp = local.hour * 2 + local.minute // 30
-        doy = local.dayofyear
+        doy = local.day_of_year
         out = pd.DataFrame(
             {
                 "cal__sp": sp,
                 "cal__hour": local.hour,
-                "cal__dow": local.dayofweek,
+                "cal__dow": local.day_of_week,
                 "cal__month": local.month,
-                "cal__is_weekend": (local.dayofweek >= 5).astype(int),
+                "cal__is_weekend": (local.day_of_week >= 5).astype(int),
                 "cal__doy_sin": np.sin(2 * np.pi * doy / 365.25),
                 "cal__doy_cos": np.cos(2 * np.pi * doy / 365.25),
                 "cal__sp_sin": np.sin(2 * np.pi * sp / 48),

@@ -101,7 +101,7 @@ def build_features(candles: pd.DataFrame, store: ParquetStore | None, cfg: Strat
     f["spread_med"] = f["spread"].rolling(120, min_periods=1).median()
     local = c.index.tz_convert(cfg.timezone)
     f["hour"] = local.hour
-    f["dow"] = local.dayofweek
+    f["dow"] = local.day_of_week
     f["gap_hours"] = pd.Series(c.index, index=c.index).diff().dt.total_seconds().div(3600).fillna(1)
     if "volume" in c:
         f["volume_rel"] = c["volume"] / c["volume"].rolling(120, min_periods=10).mean()

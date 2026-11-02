@@ -394,15 +394,22 @@ def test_features_use_storms_on_the_day_and_lag_gas_two_days(tmp_path):
     settings, store = make_env(tmp_path)
     populate(store, days=40)
     end = store.last_timestamp("demand", "GB")
-    day = (end - pd.Timedelta(days=5)).tz_convert("Europe/London").normalize()
-    store.write("weather_events", "GB", pd.DataFrame({"timestamp": [day.tz_convert("UTC")], "storm_name": ["Amy"],
+    # Work in UK calendar days, not 24-hour steps: across a clock change, "midnight minus 10 x 24h"
+    # lands on 01:00 BST, and 01:00 on the October change day happens twice.
+    tz = settings.timezone
+
+    def uk(d, hour=0):
+        return (pd.Timestamp(d) + pd.Timedelta(hours=hour)).tz_localize(tz).tz_convert("UTC")
+
+    day = (end.tz_convert(tz) - pd.Timedelta(days=5)).date()
+    store.write("weather_events", "GB", pd.DataFrame({"timestamp": [uk(day)], "storm_name": ["Amy"],
                                                       "named_storm": [1]}), ("timestamp", "storm_name"))
-    gas_days = pd.date_range(day - pd.Timedelta(days=10), day, freq="1D").tz_convert("UTC")
+    gas_days = pd.date_range(day - pd.Timedelta(days=10), day, freq="D").tz_localize(tz).tz_convert("UTC")
     store.write("gas_prices", "GB", pd.DataFrame({"timestamp": gas_days, "gas_sap_pkwh": range(len(gas_days))}))
     fs = FeatureBuilder(store, settings).build(end - pd.Timedelta(days=10), end)
     f = fs.frame
-    noon = (day + pd.Timedelta(hours=12)).tz_convert("UTC")
-    assert f.loc[noon, "evt__named_storm"] == 1 and f.loc[noon - pd.Timedelta(days=1), "evt__named_storm"] == 0
+    noon = uk(day, 12)
+    assert f.loc[noon, "evt__named_storm"] == 1 and f.loc[uk(day - pd.Timedelta(days=1), 12), "evt__named_storm"] == 0
     # on storm day D the newest gas value usable is D-2's
     assert f.loc[noon, "gas_prices__gas_sap_pkwh"] == len(gas_days) - 3
 
