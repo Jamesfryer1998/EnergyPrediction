@@ -138,7 +138,7 @@ def parse_month_report(content: bytes) -> pd.DataFrame:
     sheets = _read_tables(content)
     best = None
     for raw in sheets.values():
-        for cand in (_long_table(raw), _wide_table(raw)):
+        for cand in (_long_table(raw), _wide_table(raw), _calendar_year_table(raw)):
             if cand is not None and (best is None or len(cand) > len(best)):
                 best = cand
     if best is None or best.empty:
@@ -197,6 +197,59 @@ def _wide_table(raw: pd.DataFrame) -> pd.DataFrame | None:
         if len(recs) >= 3:
             df = pd.DataFrame(recs, columns=["month", "group", "n"])
             return df.pivot_table(index="month", columns="group", values="n", aggfunc="sum").sort_index()
+    return None
+
+
+_MONTH_NAMES = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun",
+                                             "jul", "aug", "sep", "oct", "nov", "dec"), start=1)}
+
+
+def _month_name(v) -> int | None:
+    """'Jan' / 'January' / 'sept' -> 1..12, else None."""
+    txt = _cell(v).strip().lower()
+    if len(txt) < 3 or len(txt) > 9 or not txt.isalpha():
+        return None
+    for name, i in _MONTH_NAMES.items():
+        if txt.startswith(name):
+            return i
+    return None
+
+
+def _calendar_year_table(raw: pd.DataFrame, today: date | None = None) -> pd.DataFrame | None:
+    """The layout Ofgem's register moved to (Nov 2026): technologies down the side and month
+    NAMES across the top (Jan | Feb | ... | Dec, maybe a total) with no year on them. The year
+    comes from a 4-digit year in the rows above the header (e.g. a title); without one it's the
+    current year, or last year if months that haven't happened yet already have numbers."""
+    today = today or date.today()
+    for i in range(min(len(raw), 60)):
+        row = raw.iloc[i].tolist()
+        cols = {j: m for j, v in enumerate(row) if (m := _month_name(v))}
+        if len(cols) < 3:
+            continue
+        tech = next((j for j, v in enumerate(row) if j not in cols and not _cell(v).startswith("total")), 0)
+        above = " ".join(_cell(v) for r in range(i) for v in raw.iloc[r].tolist()) + " " + \
+            " ".join(_cell(v) for j, v in enumerate(row) if j not in cols)
+        years = [int(y) for y in re.findall(r"\b(20\d\d)\b", above)]
+        recs = []
+        for _, r in raw.iloc[i + 1:].iterrows():
+            name = r.iloc[tech]
+            if pd.isna(name) or not _cell(name) or "total" in _cell(name):
+                continue
+            for j, month in cols.items():
+                v = pd.to_numeric(str(r.iloc[j]).replace(",", ""), errors="coerce")
+                if pd.notna(v):
+                    recs.append((month, tech_group(name), float(v)))
+        if len(recs) < 3:
+            continue
+        df = pd.DataFrame(recs, columns=["month", "group", "n"])
+        if years:
+            year = years[-1]
+        else:
+            later = df[(df["month"] > today.month) & (df["n"] != 0)]
+            year = today.year - 1 if not later.empty else today.year
+        df["month"] = [pd.Timestamp(year, m, 1) for m in df["month"]]
+        out = df.pivot_table(index="month", columns="group", values="n", aggfunc="sum").sort_index()
+        return out[out.sum(axis=1) != 0]  # months with nothing issued yet aren't real zeros
     return None
 
 

@@ -393,3 +393,31 @@ def test_certificates_source_stamps_months_after_they_end(tmp_path):
     assert first["rego_issued_total"] == 150 and first["rego_issued_wind"] == 100
     assert first["ro_issued_total"] == 150  # same fake file served for both schemes
     assert pd.Timestamp(datetime(2026, 9, 30, 23), tz="UTC") in set(df[TS])
+
+
+def test_certificate_report_with_month_names_and_no_year():
+    """Ofgem's register now exports technologies down the side and Jan..Dec across the top,
+    with no year (the layout from the server's error: "r0: Jan | Feb | Mar ...")."""
+    from datetime import date
+
+    from sources.certificates import _calendar_year_table, parse_month_report
+
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    rows = [[""] + months + ["Total"],
+            ["Aerothermal"] + ["0"] * 12 + ["0"],
+            ["Biodegradable"] + ["2,759,435", "2,702,943", "2,969,838", "3,908,689"] + ["1,000"] * 6 + ["0", "0"]
+            + ["13,000,000"],
+            ["Wind Offshore"] + ["500"] * 10 + ["0", "0"] + ["5,000"],
+            ["Total"] + ["9"] * 12 + ["108"]]
+    csv = "\n".join(",".join(f'"{c}"' for c in r) for r in rows).encode()
+    m = parse_month_report(csv)  # this year's report: Nov/Dec not issued yet
+    year = date.today().year
+    assert m.loc[pd.Timestamp(year, 1, 1), "bio"] == 2_759_435 and m.loc[pd.Timestamp(year, 1, 1), "wind"] == 500
+    assert pd.Timestamp(year, 11, 1) not in m.index  # nothing issued yet: not stored as zero
+    assert "total" not in m.columns
+    raw = pd.read_csv(io.StringIO(csv.decode()), header=None, dtype=str)
+    # in March, numbers for Apr..Oct can only be last year's report
+    assert _calendar_year_table(raw, today=date(2027, 3, 5)).index[0] == pd.Timestamp(2026, 1, 1)
+    # a year in a title above the header wins
+    titled = pd.concat([pd.DataFrame([["REGO certificates issued in 2024"] + [""] * 13]), raw], ignore_index=True)
+    assert _calendar_year_table(titled).index[0] == pd.Timestamp(2024, 1, 1)

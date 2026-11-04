@@ -68,6 +68,7 @@ class IGGasPrices(DataSource):
         lock = _try_lock(trading_dir(self.settings) / "ig_download.lock")
         if lock is None:
             res.status, res.message = "skipped", "another IG download is running"
+            self.log.info("IG candles skipped: %s", res.message)
             return res
         try:
             last = None if full else self.store.last_timestamp(self.name, self.region)
@@ -76,6 +77,7 @@ class IGGasPrices(DataSource):
                 wait = self._refresh_wait(now)
                 if wait:
                     res.status, res.message = "skipped", wait
+                    self.log.info("IG candles skipped: %s", res.message)
                     return res
             resolution = self.cfg.get("resolution", "HOUR")
             market = resolve_market(self.settings, self.client)
@@ -87,6 +89,7 @@ class IGGasPrices(DataSource):
             else:
                 if now - last.tz_convert("UTC").tz_localize(None) < timedelta(minutes=50):
                     res.status, res.message = "skipped", "up to date"
+                    self.log.info("IG candles skipped: %s", res.message)
                     return res
                 since = (last - self.revision_lookback).tz_convert("UTC").tz_localize(None)
                 self._save_refresh_state(last_request=now.isoformat())
