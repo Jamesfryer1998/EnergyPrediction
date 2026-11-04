@@ -595,3 +595,49 @@ def test_web_app_logs_info_under_gunicorn(tmp_path, monkeypatch):
         for h in root.handlers:
             h.close()
         root.handlers[:], root.level = saved
+
+
+class ReusedEpicIG:
+    """What the server saw: IG moved EN.D.ICENG.FWS0.IP on to NOV-27, which is OFFLINE on demo,
+    while the next month's contract is open under another epic."""
+
+    def __init__(self, alt_status="TRADEABLE", ours="OFFLINE"):
+        self.alt_status, self.ours, self.calls = alt_status, ours, []
+
+    def find_market(self, term, exclude=()):
+        self.calls.append(("search", tuple(exclude)))
+        return {"epic": "EN.D.ICENG.DEC.IP", "instrumentName": "UK Natural Gas (£1)", "marketStatus": self.alt_status}
+
+    def instrument(self, epic):
+        self.calls.append(("instrument", epic))
+        if epic == "EN.D.ICENG.FWS0.IP":
+            return {"epic": epic, "expiry": "NOV-27", "market_status": self.ours, "value_per_point": 1.0}
+        return {"epic": epic, "expiry": _month_label(1), "market_status": self.alt_status, "value_per_point": 1.0}
+
+
+def test_resolve_market_leaves_a_reused_epic_that_went_offline(tmp_path):
+    import time
+
+    from trading.market import market_cache_path, resolve_market
+
+    settings, _ = make_env(tmp_path)
+    stale = {"epic": "EN.D.ICENG.FWS0.IP", "expiry": "NOV-27", "market_status": "OFFLINE",
+             "checked_at": time.time() - 2 * 3600}  # exactly the server's market.json, 2h old
+    market_cache_path(settings).write_text(json.dumps(stale))
+    ig = ReusedEpicIG()
+    m = resolve_market(settings, ig)
+    assert m["epic"] == "EN.D.ICENG.DEC.IP" and m["market_status"] == "TRADEABLE"
+    assert ("search", ("EN.D.ICENG.FWS0.IP",)) in ig.calls
+
+    # a normal overnight close: ours is CLOSED and so is everything else -> keep ours
+    market_cache_path(settings).write_text(json.dumps({**stale, "market_status": "CLOSED"}))
+    night = ReusedEpicIG(alt_status="CLOSED", ours="CLOSED")
+    assert resolve_market(settings, night)["epic"] == "EN.D.ICENG.FWS0.IP"
+
+    # OFFLINE with only a shut-for-the-night alternative: still move (that one reopens)
+    market_cache_path(settings).write_text(json.dumps(stale))
+    assert resolve_market(settings, ReusedEpicIG(alt_status="CLOSED"))["epic"] == "EN.D.ICENG.DEC.IP"
+
+    # a fresh (< 1h) check isn't repeated every cycle
+    market_cache_path(settings).write_text(json.dumps({**stale, "checked_at": time.time()}))
+    assert resolve_market(settings, client=None)["epic"] == "EN.D.ICENG.FWS0.IP"

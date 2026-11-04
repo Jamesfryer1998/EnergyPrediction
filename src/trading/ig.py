@@ -37,6 +37,12 @@ _MONTHS = {m: i for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), start=1)}
 
 
+def _status_rank(status: str | None) -> int:
+    """Open first; then shut for now (it reopens); OFFLINE / suspended last."""
+    s = (status or "TRADEABLE").upper()
+    return 0 if s == "TRADEABLE" else 2 if s in ("OFFLINE", "SUSPENDED") else 1
+
+
 def is_undated(expiry: str | None) -> bool:
     return expiry in (None, "", "-", "DFB")
 
@@ -287,7 +293,7 @@ class IGClient:
             name = (m.get("instrumentName") or "").upper()
             return (
                 -sum(p in name for p in prefer),
-                0 if (m.get("marketStatus") or "TRADEABLE") == "TRADEABLE" else 1,
+                _status_rank(m.get("marketStatus")),
                 0 if is_undated(m.get("expiry")) else 1,  # undated first
                 contract_month(m.get("expiry")) or (0, 0),  # then the nearest month
                 0 if (m.get("instrumentType") or "").upper() == "COMMODITIES" else 1,

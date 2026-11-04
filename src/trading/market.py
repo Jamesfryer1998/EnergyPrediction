@@ -15,6 +15,10 @@ DEFAULT_SEARCH = "UK Natural Gas"
 # Re-read the contract details twice a day: IG's gas CFD tracks a dated futures month
 # (e.g. NOV-26), so the expiry used for orders changes when it rolls.
 CACHE_SECONDS = 12 * 3600
+# ...but re-check hourly while the market isn't open: IG reuses an epic for a later contract
+# (EN.D.ICENG.FWS0.IP moved from NOV-26 to NOV-27, which is OFFLINE on demo), so a market that
+# stays shut may need replacing rather than waiting for.
+CLOSED_CACHE_SECONDS = 3600
 
 
 def trading_dir(settings: Settings) -> Path:
@@ -67,7 +71,8 @@ def resolve_market(settings: Settings, client=None, refresh: bool = False) -> di
     cached = load_market(settings)
     pinned = cfg.get("epic")
     search = cfg.get("market_search", DEFAULT_SEARCH)
-    fresh = cached and time.time() - float(cached.get("checked_at", 0)) < CACHE_SECONDS
+    max_age = CACHE_SECONDS if (cached or {}).get("market_status", "TRADEABLE") == "TRADEABLE" else CLOSED_CACHE_SECONDS
+    fresh = cached and time.time() - float(cached.get("checked_at", 0)) < max_age
     ended = contract_ended(cached)
     if cached and fresh and not refresh and not ended and (not pinned or cached.get("epic") == pinned):
         return cached
@@ -89,6 +94,8 @@ def resolve_market(settings: Settings, client=None, refresh: bool = False) -> di
             info = None  # e.g. an expired contract IG no longer lists: search again below
         if info is not None and not pinned and contract_ended(info):
             info = None
+        if info is not None and not pinned and (info.get("market_status") or "TRADEABLE") != "TRADEABLE":
+            info = _better_market(client, search, info) or info
     if info is None:
         skip = (cached.get("epic"),) if cached and contract_ended(cached) else ()
         m = client.find_market(search, exclude=skip)
@@ -106,6 +113,25 @@ def resolve_market(settings: Settings, client=None, refresh: bool = False) -> di
         log.info("IG market %s rolled from %s to %s", info["epic"], cached.get("expiry"), info.get("expiry"))
     info["checked_at"] = time.time()
     market_cache_path(settings).write_text(json.dumps(info, indent=2))
+    return info
+
+
+def _better_market(client, search: str, current: dict) -> dict | None:
+    """The cached market isn't open. If IG lists an open version of the same market (or, when
+    ours is OFFLINE, one that's merely shut for the night), return its details to switch to.
+    Night-time and weekend closures find nothing better, so nothing changes then."""
+    from .ig import IGError, _status_rank
+
+    try:
+        m = client.find_market(search, exclude=(current["epic"],))
+    except IGError:
+        return None
+    if _status_rank(m.get("marketStatus")) >= _status_rank(current.get("market_status")):
+        return None
+    info = client.instrument(m["epic"])
+    log.warning("IG market %s (%s) is %s; switching to %s (%s), which is %s", current["epic"],
+                current.get("expiry"), current.get("market_status"), info["epic"], info.get("expiry"),
+                info.get("market_status") or m.get("marketStatus"))
     return info
 
 
