@@ -201,7 +201,7 @@ class FakeIG:
     def __init__(self, tradeable=True):
         self.orders, self.tradeable, self.pos = [], tradeable, 0.0
 
-    def find_market(self, term):
+    def find_market(self, term, exclude=()):
         return {"epic": "CC.D.GAS.IP"}
 
     def instrument(self, epic):
@@ -462,3 +462,108 @@ def test_ig_prices_at_most_hourly_and_back_off_when_allowance_used(tmp_path, mon
     clock["now"] = datetime(2026, 10, 31, 6, 6)
     src.update()
     assert prices() == 5
+
+
+def _month_label(offset: int) -> str:
+    """IG expiry label for the month `offset` months from now, e.g. "DEC-26"."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    y, m = divmod(now.month - 1 + offset, 12)
+    return f"{('JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC')[m]}-{(now.year + y) % 100:02d}"
+
+
+def test_find_market_picks_the_nearest_contract_that_is_still_trading(monkeypatch):
+    from trading.ig import IGClient, contract_month, contract_month_ended
+
+    assert contract_month("NOV-26") == (2026, 11) and contract_month("-") is None
+    assert contract_month_ended(_month_label(0)) and not contract_month_ended(_month_label(1))
+
+    c = IGClient("key", "user", "pw", session=FakeHTTP())
+    markets = [
+        {"epic": "US", "instrumentName": "US Natural Gas", "expiry": _month_label(1), "marketStatus": "TRADEABLE"},
+        {"epic": "THIS", "instrumentName": "UK Natural Gas (£1)", "expiry": _month_label(0), "marketStatus": "EDITS_ONLY"},
+        {"epic": "FAR", "instrumentName": "UK Natural Gas (£1)", "expiry": _month_label(2), "marketStatus": "TRADEABLE"},
+        {"epic": "NEXT", "instrumentName": "UK Natural Gas (£1)", "expiry": _month_label(1), "marketStatus": "TRADEABLE"},
+    ]
+    monkeypatch.setattr(c, "search_markets", lambda term: markets)
+    assert c.find_market("UK Natural Gas")["epic"] == "NEXT"  # the month that's begun has ended; nearest after it
+    assert c.find_market("UK Natural Gas", exclude=("NEXT",))["epic"] == "FAR"
+
+
+class RollingIG(FakeIG):
+    """Two dated contracts: OLD has ended, NEW is trading at a different price level."""
+
+    def __init__(self, new_bid=120.0):
+        super().__init__()
+        self.new_bid, self.pos_by_epic, self.searched = new_bid, {}, []
+
+    def find_market(self, term, exclude=()):
+        self.searched.append(tuple(exclude))
+        return {"epic": "NEW", "instrumentName": "UK Natural Gas"}
+
+    def instrument(self, epic):
+        if epic == "OLD":
+            return {"epic": "OLD", "expiry": _month_label(0), "last_dealing": "2020-01-01T16:59",
+                    "currency": "GBP", "value_per_point": 10.0}
+        return {"epic": epic, "expiry": _month_label(1), "last_dealing": "2099-01-01T16:59",
+                "currency": "GBP", "value_per_point": 10.0}
+
+    def quote(self, epic):
+        return {"bid": self.new_bid, "offer": self.new_bid + 0.5, "status": "TRADEABLE"}
+
+    def place_market_order(self, epic, direction, size, expiry="-", currency="GBP"):
+        self.orders.append((epic, direction, size))
+        self.pos_by_epic[epic] = self.pos_by_epic.get(epic, 0) + (size if direction == "BUY" else -size)
+        return {"status": "ACCEPTED", "deal_id": "R1", "level": self.new_bid}
+
+    def net_position(self, epic):
+        return self.pos_by_epic.get(epic, 0.0)
+
+
+def test_resolve_market_rolls_off_an_expired_contract(tmp_path):
+    import time
+
+    from trading.market import market_cache_path, resolve_market
+
+    settings, _ = make_env(tmp_path)
+    ig = RollingIG()
+    # a FRESH cache entry for a contract that has stopped trading must not be trusted
+    market_cache_path(settings).write_text(json.dumps({"epic": "OLD", "expiry": _month_label(0),
+                                                       "last_dealing": "2020-01-01T16:59", "checked_at": time.time()}))
+    m = resolve_market(settings, ig)
+    assert m["epic"] == "NEW" and ig.searched == [("OLD",)]
+    # the new contract is cached and used without asking IG again
+    assert resolve_market(settings, client=None)["epic"] == "NEW"
+
+
+def test_paper_position_is_carried_across_a_contract_roll_without_pnl(tmp_path):
+    from trading import paper, strategy
+    from trading.market import market_cache_path
+
+    settings, store = _env_with_candles(tmp_path, days=150)
+    strategy.train(settings, store)
+    paper.update_state(settings, {"mirror_ig": True})
+    # long 1 on the old contract at 100.5 (mid 100.25)
+    old = FakeIG()
+    paper.run_cycle(settings, client=old, force_target=1.0, reason="open")
+    market_cache_path(settings).write_text(json.dumps({"epic": "OLD", "expiry": _month_label(0),
+                                                       "last_dealing": "2020-01-01T16:59"}))
+    st = paper.load_state(settings)
+    st["epic"] = "OLD"
+    paper.save_state(settings, st)
+    before = paper.status(settings)
+
+    # the old month expired; the next month trades 20 points higher
+    ig = RollingIG(new_bid=120.0)
+    res = paper.run_cycle(settings, client=ig, force_target=1.0)
+    assert res["epic"] == "NEW" and res["position"] == 1.0
+    book, _ = paper.Ledger(settings).load_book(strategy.StrategyConfig.from_settings(settings))
+    assert abs(book.avg_price - (100.5 + 20.0)) < 1e-9  # entry moved by the 20-point gap ...
+    assert abs(book.realised - before["realised"]) < 1e-9  # ... and no profit booked from it
+    assert ig.orders == [("NEW", "BUY", 1.0)]  # IG demo position reopened on the new contract
+    assert "rolled" in paper.Ledger(settings).rows("decisions")[-1]["note"]
+    assert paper.load_state(settings)["epic"] == "NEW"
+    # next cycle: nothing more to roll or reorder
+    paper.run_cycle(settings, client=ig, force_target=1.0)
+    assert ig.orders == [("NEW", "BUY", 1.0)]

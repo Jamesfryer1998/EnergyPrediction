@@ -32,6 +32,36 @@ class IGError(RuntimeError):
     pass
 
 
+# ── contract months ("NOV-26") ──────────────────────────────────────────────
+_MONTHS = {m: i for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                       "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), start=1)}
+
+
+def is_undated(expiry: str | None) -> bool:
+    return expiry in (None, "", "-", "DFB")
+
+
+def contract_month(expiry: str | None) -> tuple[int, int] | None:
+    """(year, month) for an IG expiry label like "NOV-26", else None (undated or unknown)."""
+    if is_undated(expiry):
+        return None
+    try:
+        mon, yy = str(expiry).strip().upper().split("-")
+        return 2000 + int(yy), _MONTHS[mon[:3]]
+    except (ValueError, KeyError):
+        return None
+
+
+def contract_month_ended(expiry: str | None, today: datetime | None = None) -> bool:
+    """A gas contract for month M stops trading before M begins, so "NOV-26" has ended once it's
+    November 2026 (it actually ends a few days earlier; `last_dealing` covers that)."""
+    month = contract_month(expiry)
+    if month is None:
+        return False
+    today = today or datetime.now(timezone.utc)
+    return (today.year, today.month) >= month
+
+
 class IGNotConfigured(IGError):
     pass
 
@@ -241,10 +271,15 @@ class IGClient:
     def market(self, epic: str) -> dict:
         return self.request("GET", f"/markets/{epic}", 3)
 
-    def find_market(self, term: str, prefer: tuple[str, ...] = ("UK", "NBP")) -> dict:
-        """Pick the best match for e.g. 'UK Natural Gas': an undated (rolling cash) market whose
-        name mentions UK/NBP, otherwise the first commodity match."""
-        found = [m for m in self.search_markets(term) if m.get("epic")]
+    def find_market(self, term: str, prefer: tuple[str, ...] = ("UK", "NBP"),
+                    exclude: tuple[str, ...] = ()) -> dict:
+        """Pick the best match for e.g. 'UK Natural Gas': a market whose name mentions UK/NBP,
+        preferring one that's open for dealing, then an undated (rolling cash) market, then the
+        NEAREST dated contract that hasn't ended (IG's UK gas is a dated futures month, e.g.
+        NOV-26, which stops trading late in the month before). `exclude`: epics to skip, e.g. the
+        contract that just expired."""
+        found = [m for m in self.search_markets(term) if m.get("epic") and m["epic"] not in exclude]
+        found = [m for m in found if not contract_month_ended(m.get("expiry"))]
         if not found:
             raise IGError(f"no IG market found for {term!r}")
 
@@ -252,7 +287,9 @@ class IGClient:
             name = (m.get("instrumentName") or "").upper()
             return (
                 -sum(p in name for p in prefer),
-                0 if m.get("expiry") in ("-", "DFB", None) else 1,  # undated first
+                0 if (m.get("marketStatus") or "TRADEABLE") == "TRADEABLE" else 1,
+                0 if is_undated(m.get("expiry")) else 1,  # undated first
+                contract_month(m.get("expiry")) or (0, 0),  # then the nearest month
                 0 if (m.get("instrumentType") or "").upper() == "COMMODITIES" else 1,
                 len(name),
             )
@@ -275,7 +312,9 @@ class IGClient:
                 "one_pip_means": inst.get("onePipMeans"), "lot_size": _f(inst.get("lotSize")),
                 "unit": inst.get("unit"), "margin_factor": _f(inst.get("marginFactor")),
                 "min_size": _f((rules.get("minDealSize") or {}).get("value")),
-                "market_status": (m.get("snapshot") or {}).get("marketStatus")}
+                "market_status": (m.get("snapshot") or {}).get("marketStatus"),
+                # last time this contract can be dealt, e.g. "2026-10-28T16:59" (dated contracts only)
+                "last_dealing": (inst.get("expiryDetails") or {}).get("lastDealingDate")}
 
     # ── prices ───────────────────────────────────────────────────────────
     def prices(self, epic: str, start: datetime | None = None, end: datetime | None = None,

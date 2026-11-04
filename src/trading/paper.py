@@ -167,6 +167,9 @@ def run_cycle(settings: Settings, region: str = "GB", client=None, force_target:
 
         client = IGClient(session_file=trading_dir(settings) / "ig_session.json")
     note = []
+    # remember the contract before this cycle, in case it rolls to the next month below
+    prev_epic = state.get("epic") or (load_market(settings) or {}).get("epic")
+    prev_last = store.last_timestamp("ig_gas", region) if live else None
 
     # 1. fresh candles + a live quote (or the last candle when there's no IG login, e.g. demo data)
     if refresh and live:
@@ -201,6 +204,10 @@ def run_cycle(settings: Settings, region: str = "GB", client=None, force_target:
     book, last_mark = ledger.load_book(cfg)
     book.charge_funding(nights_between(last_mark, now, cfg.timezone) if last_mark else 0, mid)
 
+    rolled = live and prev_epic and market.get("epic") and prev_epic != market["epic"]
+    if rolled:
+        _roll_book(book, store, region, state, prev_last, mid, prev_epic, market, note)
+
     pos_before = book.position
     if force_target is not None:
         target, pred, thr = force_target, None, None
@@ -210,6 +217,10 @@ def run_cycle(settings: Settings, region: str = "GB", client=None, force_target:
     action, fill, ig_res = "hold", None, None
     if not tradeable:
         action, target = "market closed", book.position
+    elif state.get("mirror_ig") and live and (rolled or state.get("ig_roll_pending")) and abs(target - book.position) <= 1e-9:
+        # IG closes positions on a contract when it expires: reopen the paper position on the new one
+        ig_res = _reopen_on_ig(client, market, book.position, note)
+        action = "rolled position to the new IG contract"
     elif abs(target - book.position) > 1e-9:
         delta = target - book.position
         why = reason or (f"predicted {pred:+.2f} over {cfg.horizon}h vs threshold ±{thr:.2f}" if pred is not None else "")
@@ -217,7 +228,11 @@ def run_cycle(settings: Settings, region: str = "GB", client=None, force_target:
         action = f"{fill['side'].lower()} {fill['size']:g} @ {fill['price']:.2f}"
         if state.get("mirror_ig") and live:
             try:
-                ig_res = client.place_market_order(market["epic"], "BUY" if delta > 0 else "SELL", abs(delta),
+                ig_delta = delta
+                if rolled or state.get("ig_roll_pending"):  # IG holds nothing on the new contract yet
+                    ig_delta = target - client.net_position(market["epic"])
+                ig_res = {"status": "ACCEPTED", "reason": "IG already holds this"} if abs(ig_delta) < 1e-9 else \
+                    client.place_market_order(market["epic"], "BUY" if ig_delta > 0 else "SELL", abs(ig_delta),
                                                    market.get("expiry") or "-", market.get("currency") or "GBP")
                 if ig_res.get("status") != "ACCEPTED":
                     note.append(f"IG demo order {ig_res.get('status')}: {ig_res.get('reason')}")
@@ -244,8 +259,50 @@ def run_cycle(settings: Settings, region: str = "GB", client=None, force_target:
              book.position, result["equity"], f" — {'; '.join(note)}" if note else "")
     st = load_state(settings)
     st["last_cycle"], st["last_result"] = now, {k: result[k] for k in ("action", "pred", "position", "equity")}
+    if live and market.get("epic"):
+        st["epic"] = market["epic"]
+        if tradeable:
+            st["last_mid"] = mid
+        # the IG mirror needs reopening after a roll; done on the first open-market cycle
+        st["ig_roll_pending"] = bool(state.get("mirror_ig") and book.position
+                                     and (rolled or state.get("ig_roll_pending")) and not tradeable)
     save_state(settings, st)
     return result
+
+
+def _roll_book(book, store, region, state, prev_last, mid, prev_epic, market, note) -> None:
+    """The traded contract changed (e.g. NOV-26 expired, now DEC-26). The two months trade at
+    different prices, so carry the position across without booking that gap as profit or loss:
+    shift the entry price by (new contract mid - old contract's last mid), as a broker's roll does."""
+    old_mid = state.get("last_mid")
+    if not old_mid and prev_last is not None:
+        old = store.read("ig_gas", region, prev_last, prev_last + pd.Timedelta(minutes=1))
+        if not old.empty and "mid_close" in old:
+            old_mid = float(old["mid_close"].iloc[-1])
+    msg = f"IG contract rolled {prev_epic} -> {market['epic']} ({market.get('expiry')})"
+    if book.position and old_mid:
+        book.avg_price += mid - float(old_mid)
+        msg += f"; position carried over, entry price moved by {mid - float(old_mid):+.2f} (no P&L)"
+    note.append(msg)
+    log.warning(msg)
+
+
+def _reopen_on_ig(client, market: dict, position: float, note: list) -> dict | None:
+    from .ig import IGError
+
+    try:
+        held = client.net_position(market["epic"])
+        delta = position - held
+        if abs(delta) < 1e-9:
+            return None
+        res = client.place_market_order(market["epic"], "BUY" if delta > 0 else "SELL", abs(delta),
+                                        market.get("expiry") or "-", market.get("currency") or "GBP")
+        if res.get("status") != "ACCEPTED":
+            note.append(f"IG demo roll order {res.get('status')}: {res.get('reason')}")
+        return res
+    except IGError as exc:
+        note.append(f"IG demo roll order failed: {exc}")
+        return {"status": "ERROR", "reason": str(exc)}
 
 
 def status(settings: Settings) -> dict:
