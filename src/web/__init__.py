@@ -94,6 +94,16 @@ class _QuietPolling:
 
 def create_app() -> Flask:
     import logging
+    import sys
+
+    # Under gunicorn (the server deployment) nothing else sets up logging, so Python's default
+    # would drop every INFO line: IG logins, "paper trade cycle: ...", contract rolls. Log to the
+    # console (the systemd journal) and logs/web.log like the CLI does. `python src/main.py web`
+    # has already set this up, and setup_logging does nothing when handlers already exist.
+    if "gunicorn" in sys.modules:
+        from logging_setup import setup_logging
+
+        setup_logging(os.environ.get("LOG_LEVEL", "INFO"), "web.log")
 
     wz = logging.getLogger("werkzeug")
     if not any(isinstance(f, _QuietPolling) for f in wz.filters):

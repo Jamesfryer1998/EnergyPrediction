@@ -567,3 +567,31 @@ def test_paper_position_is_carried_across_a_contract_roll_without_pnl(tmp_path):
     # next cycle: nothing more to roll or reorder
     paper.run_cycle(settings, client=ig, force_target=1.0)
     assert ig.orders == [("NEW", "BUY", 1.0)]
+
+
+def test_web_app_logs_info_under_gunicorn(tmp_path, monkeypatch):
+    """The server runs `gunicorn web:create_app()`; INFO lines (IG logins, trading cycles) must
+    reach the journal and logs/web.log instead of being dropped by Python's default logging."""
+    import logging
+    import sys
+    import types
+
+    import logging_setup
+    import web
+
+    root = logging.getLogger()
+    saved = (root.handlers[:], root.level)
+    root.handlers.clear()
+    monkeypatch.setattr(logging_setup, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setitem(sys.modules, "gunicorn", types.ModuleType("gunicorn"))
+    make_env(tmp_path)
+    try:
+        web.create_app()
+        logging.getLogger("trading.ig").info("IG demo: logged in (account TEST)")
+        for h in root.handlers:
+            h.flush()
+        assert "IG demo: logged in" in (tmp_path / "logs" / "web.log").read_text()
+    finally:
+        for h in root.handlers:
+            h.close()
+        root.handlers[:], root.level = saved
